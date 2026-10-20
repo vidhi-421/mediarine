@@ -1,0 +1,10 @@
+{
+  "description": "Investigate and validate healthcare claims with a professional platform offering evidence assessment, source verification, and detailed investigation tracking.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
