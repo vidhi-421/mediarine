@@ -10,7 +10,7 @@ import { RETRIEVAL_LABEL, type RetrievalStatus } from '../lib/tinyfish'
 
 function RetrievalPanel({ inv }: { inv: Investigation }) {
   const st = retrievalStatusOf(inv)
-  const busy = st === 'retrieving' || st === 'queued' && inv.status === 'retrieving'
+  const busy = inv.status === 'retrieving' || st === 'retrieving'
   const order: RetrievalStatus[] = ['queued', 'retrieving', st === 'failed' ? 'failed' : st === 'not_configured' ? 'not_configured' : 'completed']
   const reached = (k: RetrievalStatus) => {
     if (!st) return false
@@ -20,7 +20,24 @@ function RetrievalPanel({ inv }: { inv: Investigation }) {
   const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '')
   return (
     <Card>
-      <CardHeader title="Evidence retrieval" desc="TinyFish live source retrieval" action={!inv.sample && <Button size="sm" variant="primary" loading={busy} onClick={() => runRetrieval(inv.id)}><Icon name={st ? 'refresh' : 'play'} size={14} />{st ? 'Retrieve again' : 'Retrieve evidence'}</Button>} />
+      <CardHeader
+        title="Evidence retrieval"
+        desc="TinyFish live source retrieval"
+        action={!inv.sample && (
+          <Button
+            size="sm"
+            variant="primary"
+            loading={busy}
+            disabled={busy}
+            onClick={() => {
+              if (!busy) runRetrieval(inv.id)
+            }}
+          >
+            <Icon name={st ? 'refresh' : 'play'} size={14} />
+            {st ? 'Retrieve again' : 'Retrieve evidence'}
+          </Button>
+        )}
+      />
       <div className="space-y-4 p-5">
         <ol className="flex items-center gap-2">
           {order.map((k, i) => {

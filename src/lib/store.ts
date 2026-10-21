@@ -781,7 +781,7 @@ export function startInvestigationPolling(
   }
 
   const intervalMs = opts?.intervalMs ?? 3000
-  const maxDurationMs = opts?.maxDurationMs ?? 200000 // ~200 seconds total (covers TinyFish 180s)
+  const maxDurationMs = opts?.maxDurationMs ?? 85000 // 85s (matches TinyFish 75s backend timeout)
   const startTime = Date.now()
 
   const timerId = window.setInterval(async () => {
@@ -789,19 +789,7 @@ export function startInvestigationPolling(
       const elapsed = Date.now() - startTime
       if (elapsed >= maxDurationMs) {
         stopInvestigationPolling(id)
-        const current = invStore.get().find((i) => i.id === id)
-        if (current && current.status === 'retrieving') {
-          void updateInvestigation(id, {
-            status: 'failed',
-            retrievalError: 'Retrieval timed out. You can retry from the investigation page.',
-            retrieval: {
-              status: 'failed',
-              completedAt: new Date().toISOString(),
-              message: 'Client-side timeout reached while waiting for retrieval.',
-            },
-          })
-        }
-        opts?.onError?.(new Error('Retrieval timed out.'))
+        opts?.onError?.(new Error('Retrieval timed out waiting for response.'))
         return
       }
 
@@ -841,11 +829,19 @@ export async function runRetrieval(id: string) {
   const cfg = getConfig(getSettings())
 
   if (backend.connected || !backend.error) {
-    void updateInvestigation(id, {
-      status: 'retrieving',
-      retrievalError: undefined,
-      retrieval: { status: 'retrieving', startedAt: new Date().toISOString() },
-    })
+    // Optimistic local state update so UI immediately indicates active retrieval
+    invStore.set(
+      invStore.get().map((i) =>
+        i.id === id
+          ? {
+              ...i,
+              status: 'retrieving',
+              retrievalError: undefined,
+              retrieval: { status: 'retrieving', startedAt: new Date().toISOString() },
+            }
+          : i
+      )
+    )
     try {
       await api.triggerRetrieval(id, {
         tinyfishEndpoint: cfg.endpoint || undefined,
@@ -911,8 +907,11 @@ export async function runRetrieval(id: string) {
 
 export function retrievalStatusOf(inv: Investigation): RetrievalStatus | undefined {
   if (inv.status === 'retrieving') return 'retrieving'
-  if (inv.retrieval) return inv.retrieval.status
   if (inv.status === 'failed') return 'failed'
+  if (inv.retrieval) {
+    if (inv.retrieval.status === 'queued' && inv.status === 'pending') return undefined
+    return inv.retrieval.status
+  }
   if (inv.evidence.some((e) => e.retrieval === 'retrieved')) return 'completed'
   return undefined
 }

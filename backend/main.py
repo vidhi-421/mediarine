@@ -223,6 +223,8 @@ def add_evidence(inv_id: str, body: AddEvidenceRequest):
 # Retrieval
 # ---------------------------------------------------------------------------
 
+_active_retrieval_tasks: set[str] = set()
+
 
 @app.post("/api/investigations/{inv_id}/retrieve", tags=["Retrieval"])
 async def trigger_retrieval(
@@ -235,7 +237,8 @@ async def trigger_retrieval(
         raise HTTPException(404, detail="Investigation not found.")
     if inv.get("sample"):
         raise HTTPException(400, detail="Retrieval is disabled for sample investigations.")
-    if inv.get("status") == "retrieving":
+    # Prevent concurrent duplicate background tasks for the same investigation
+    if inv_id in _active_retrieval_tasks:
         return {"message": "Retrieval already in progress.", "investigationId": inv_id}
 
     endpoint = (body.tinyfishEndpoint if body else None) or None
@@ -250,11 +253,13 @@ async def trigger_retrieval(
             "retrieval": {"status": "retrieving", "startedAt": started_at},
         },
     )
+    _active_retrieval_tasks.add(inv_id)
     background_tasks.add_task(_run_retrieval_task, inv_id, endpoint, api_key)
     return {"message": "Retrieval started.", "investigationId": inv_id}
 
 
 async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_key: Optional[str] = None):
+    _active_retrieval_tasks.add(inv_id)
     try:
         inv = db.get_investigation(inv_id)
         if inv is None:
@@ -343,6 +348,8 @@ async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_k
                 },
             },
         )
+    finally:
+        _active_retrieval_tasks.discard(inv_id)
 
 
 # ---------------------------------------------------------------------------

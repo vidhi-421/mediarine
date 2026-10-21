@@ -292,7 +292,7 @@ def create_investigation(data: dict) -> dict:
         "billingCodes": [c if isinstance(c, dict) else c.model_dump() for c in (data.get("billingCodes") or [])],
         "clinicalTimeline": [t if isinstance(t, dict) else t.model_dump() for t in (data.get("clinicalTimeline") or [])],
         "reviewerNotes": (data.get("reviewerNotes") or "").strip() or None,
-        "retrieval": {"status": "queued"},
+        "retrieval": {"status": "retrieving", "startedAt": _now()} if data.get("runNow") else None,
     }
 
     if client:

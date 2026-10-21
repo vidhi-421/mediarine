@@ -30,7 +30,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 180  # seconds for live-web agent execution
+TIMEOUT = 75  # seconds for live-web agent execution
 
 _TINYFISH_ENDPOINT = os.getenv("TINYFISH_ENDPOINT", "").strip()
 _TINYFISH_API_KEY = os.getenv("TINYFISH_API_KEY", "").strip()
@@ -131,13 +131,12 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
             (c.get("code", "") if isinstance(c, dict) else str(c))
             for c in (inv.get("billingCodes") or [])
         )
+        claim_text = inv.get("claim", "")
         goal = (
-            f"Review clinical billing guidelines for claim: '{inv.get('claim', '')}'. "
-            f"Category: {inv.get('category', '')}. "
-            f"Provider: {inv.get('provider', 'Not specified')}. "
-            f"{f'Billing codes: {codes_str}. ' if codes_str else ''}"
-            f"Identify whether documentation guidelines or clinical criteria support or conflict with the claim. "
-            f"Return a structured JSON with keys: summary, evidence (array of objects with title, url, publisher, classification ('verified'|'unverified'|'conflicting'), and summary), riskIndicators, and recommendation."
+            f"Extract the page title and an overview summary of clinical, billing, or healthcare policy guidelines from this page related to: '{claim_text}'. "
+            f"{f'Relevant billing codes: {codes_str}. ' if codes_str else ''}"
+            f"Do not navigate away from this page or browse external links. "
+            f"Return a JSON object with keys: title, summary, recommendation."
         )
         payload = {
             "url": target_url,
@@ -264,17 +263,19 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
 
     evidence = [ev for e in (raw_evidence or []) for ev in [parse_ev(e)] if ev is not None]
 
-    # If TinyFish returned a summary result but no separate evidence items, create a synthetic evidence item
+    # If TinyFish returned a summary result but no separate evidence items, create a structured live evidence item
     if not evidence and extracted_summary:
+        title_from_result = (data.get("result", {}).get("title") if isinstance(data.get("result"), dict) else None)
+        hostname = target_url.split("/")[2] if "/" in target_url else "Web Source"
         evidence.append({
             "id": str(uuid.uuid4()),
-            "title": f"TinyFish Web Agent Verification ({target_url.split('/')[2] if '/' in target_url else 'Source'})",
+            "title": title_from_result or f"Live Source ({hostname})",
             "url": target_url,
-            "publisher": "TinyFish Web Agent",
+            "publisher": hostname,
             "published": None,
             "retrieval": "retrieved",
             "origin": "live-source",
-            "classification": "verified" if "support" in extracted_summary.lower() else "unverified",
+            "classification": "verified" if any(w in extracted_summary.lower() for w in ("support", "covered", "eligible", "approved", "standard")) else "unverified",
             "summary": str(extracted_summary),
             "retrievedAt": now,
             "provider": "tinyfish",
