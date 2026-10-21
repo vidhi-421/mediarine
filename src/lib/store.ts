@@ -1,6 +1,15 @@
 import { useSyncExternalStore } from 'react'
 import { toast } from './toast'
 import { getConfig, retrieveEvidence, type RetrievalStatus } from './tinyfish'
+import * as api from './api'
+
+export interface BackendStatus {
+  connected: boolean
+  loading: boolean
+  error?: string | null
+  endpoint: string
+  lastSyncedAt?: string
+}
 
 export type Classification = 'verified' | 'unverified' | 'conflicting' | 'inconclusive'
 export type Origin = 'live-source' | 'ai-summary' | 'user-provided'
@@ -444,38 +453,150 @@ const invStore = createStore<Investigation[]>('medarina.investigations.v2', migr
 }
 const setStore = createStore<Settings>('medarina.settings.v1', () => defaultSettings)
 
+const backendStore = createStore<BackendStatus>('medarina.backend.v1', () => ({
+  connected: false,
+  loading: false,
+  error: null,
+  endpoint: api.API_BASE_URL,
+}))
+
 export const useInvestigations = () => useSyncExternalStore(invStore.subscribe, invStore.get)
 export const useSettings = () => useSyncExternalStore(setStore.subscribe, setStore.get)
+export const useBackendStatus = () => useSyncExternalStore(backendStore.subscribe, backendStore.get)
 export const getSettings = setStore.get
 export const getInvestigations = invStore.get
+export const getBackendStatus = backendStore.get
+
+/** Fetches real investigations from the FastAPI backend and merges with static samples. */
+export async function syncWithBackend(): Promise<boolean> {
+  backendStore.set({ ...backendStore.get(), loading: true })
+  try {
+    const res = await api.listInvestigations({ limit: 500 })
+    const backendItems: Investigation[] = (res.items || [])
+      .filter((i: any) => !i.sample)
+      .map((i: any) => ({
+        ...i,
+        sample: false,
+        evidence: i.evidence ?? [],
+        riskIndicators: i.riskIndicators ?? [],
+        notes: i.notes ?? '',
+        savedReports: i.savedReports ?? [],
+      }))
+    const samples = sampleData()
+    invStore.set([...backendItems, ...samples])
+    backendStore.set({
+      connected: true,
+      loading: false,
+      error: null,
+      endpoint: api.API_BASE_URL,
+      lastSyncedAt: new Date().toISOString(),
+    })
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    backendStore.set({
+      connected: false,
+      loading: false,
+      error: msg,
+      endpoint: api.API_BASE_URL,
+    })
+    return false
+  }
+}
+
+export const refreshInvestigations = syncWithBackend
+
+// Trigger initial backend synchronization when running in browser
+if (typeof window !== 'undefined') {
+  void syncWithBackend()
+}
 
 export function updateSettings(patch: Partial<Settings>) {
   setStore.set({ ...setStore.get(), ...patch })
 }
 
-export function updateInvestigation(id: string, patch: Partial<Investigation>) {
+export async function updateInvestigation(id: string, patch: Partial<Investigation>): Promise<void> {
+  const inv = invStore.get().find((i) => i.id === id)
+  if (!inv) return
+
+  // Optimistic local update
   invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, ...patch } : i)))
+
+  if (inv.sample) return
+
+  const backend = backendStore.get()
+  if (backend.connected || !backend.error) {
+    try {
+      const updated = await api.updateInvestigation(id, patch)
+      invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, ...updated } : i)))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast('error', `Could not save changes to backend: ${msg}`)
+      invStore.set(invStore.get().map((i) => (i.id === id ? inv : i)))
+      throw err
+    }
+  }
 }
 
-export function saveReport(id: string): SavedReport | null {
+export async function saveReport(id: string): Promise<SavedReport | null> {
   const inv = invStore.get().find((i) => i.id === id)
   if (!inv) return null
+
   const { savedReports, ...snapshot } = inv
-  const rep: SavedReport = { id: crypto.randomUUID(), generatedAt: new Date().toISOString(), reviewStatus: inv.status, outcome: inv.outcome ?? 'Not determined', snapshot: structuredClone(snapshot) }
-  const ok = invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, savedReports: [rep, ...(savedReports ?? [])].slice(0, 20) } : i)))
-  if (!ok) {
-    invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, savedReports } : i)))
-    return null
+  const localRep: SavedReport = {
+    id: crypto.randomUUID(),
+    generatedAt: new Date().toISOString(),
+    reviewStatus: inv.status,
+    outcome: inv.outcome ?? 'Not determined',
+    snapshot: structuredClone(snapshot),
   }
-  return rep
+
+  if (inv.sample) {
+    invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, savedReports: [localRep, ...(savedReports ?? [])].slice(0, 20) } : i)))
+    return localRep
+  }
+
+  const backend = backendStore.get()
+  if (backend.connected || !backend.error) {
+    try {
+      const rep = await api.saveReport(id)
+      const updatedReports = [rep, ...(savedReports ?? []).filter((r) => r.id !== rep.id)].slice(0, 20)
+      invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, savedReports: updatedReports } : i)))
+      return rep
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast('error', `Failed to save report to backend: ${msg}`)
+      throw err
+    }
+  }
+
+  invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, savedReports: [localRep, ...(savedReports ?? [])].slice(0, 20) } : i)))
+  return localRep
 }
 
-export function removeInvestigation(id: string) {
+export async function removeInvestigation(id: string): Promise<void> {
+  const inv = invStore.get().find((i) => i.id === id)
+  if (!inv) return
+
   invStore.set(invStore.get().filter((i) => i.id !== id))
+
+  if (inv.sample) return
+
+  const backend = backendStore.get()
+  if (backend.connected || !backend.error) {
+    try {
+      await api.deleteInvestigation(id)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast('error', `Failed to delete from backend: ${msg}`)
+      invStore.set([inv, ...invStore.get()])
+      throw err
+    }
+  }
 }
 
-export function archiveInvestigation(id: string, archived: boolean) {
-  updateInvestigation(id, { archived })
+export function archiveInvestigation(id: string, archived: boolean): Promise<void> {
+  return updateInvestigation(id, { archived })
 }
 
 export function evidenceStatus(inv: Investigation): string {
@@ -496,13 +617,35 @@ export function clearAll() {
   invStore.set([])
 }
 
-export function addEvidence(id: string, e: Omit<Evidence, 'id'>) {
+export async function addEvidence(id: string, e: Omit<Evidence, 'id'>): Promise<Evidence> {
   const inv = invStore.get().find((i) => i.id === id)
-  if (!inv) return
-  updateInvestigation(id, { evidence: [...inv.evidence, { ...e, id: crypto.randomUUID() }] })
+  if (!inv) throw new Error('Investigation not found')
+
+  if (inv.sample) {
+    const localEv: Evidence = { ...e, id: crypto.randomUUID() }
+    invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, evidence: [...i.evidence, localEv] } : i)))
+    return localEv
+  }
+
+  const backend = backendStore.get()
+  if (backend.connected || !backend.error) {
+    try {
+      const saved = await api.addEvidence(id, e)
+      invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, evidence: [...i.evidence, saved] } : i)))
+      return saved
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast('error', `Failed to save evidence to backend: ${msg}`)
+      throw err
+    }
+  }
+
+  const localEv: Evidence = { ...e, id: crypto.randomUUID() }
+  invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, evidence: [...i.evidence, localEv] } : i)))
+  return localEv
 }
 
-export function createInvestigation(input: {
+export async function createInvestigation(input: {
   claim: string
   category: string
   details: string
@@ -516,7 +659,51 @@ export function createInvestigation(input: {
   billingCodes?: BillingCode[]
   clinicalTimeline?: TimelineEvent[]
   reviewerNotes?: string
-}): Investigation {
+  runNow?: boolean
+}): Promise<Investigation> {
+  const payload = {
+    claim: input.claim.trim(),
+    category: input.category,
+    details: input.details.trim(),
+    provider: input.provider?.trim() || undefined,
+    sourceUrl: input.sourceUrl?.trim() || undefined,
+    ref: input.ref?.trim() || undefined,
+    serviceDateFrom: input.serviceDateFrom || undefined,
+    serviceDateTo: input.serviceDateTo || undefined,
+    billingDate: input.billingDate || undefined,
+    billedAmount: input.billedAmount,
+    billingCodes: input.billingCodes,
+    clinicalTimeline: input.clinicalTimeline,
+    reviewerNotes: input.reviewerNotes?.trim() || undefined,
+    runNow: input.runNow ?? false,
+  }
+
+  const backend = backendStore.get()
+  if (backend.connected || !backend.error) {
+    try {
+      const created = await api.createInvestigation(payload)
+      const inv: Investigation = {
+        ...created,
+        sample: false,
+        evidence: created.evidence ?? [],
+        riskIndicators: created.riskIndicators ?? [],
+        notes: created.notes ?? '',
+        savedReports: created.savedReports ?? [],
+      }
+      invStore.set([inv, ...invStore.get().filter((i) => i.id !== inv.id)])
+      backendStore.set({ ...backendStore.get(), connected: true, error: null })
+      return inv
+    } catch (err) {
+      const isNetwork = err instanceof Error && err.message.includes('Could not connect')
+      if (!isNetwork) {
+        throw err
+      }
+      backendStore.set({ ...backendStore.get(), connected: false, error: (err as Error).message })
+      toast('info', 'Backend offline. Investigation saved in local demo store.')
+    }
+  }
+
+  // Local fallback
   const list = invStore.get()
   const year = new Date().getFullYear()
   const n = list.filter((i) => !i.sample).length + 1
@@ -546,24 +733,165 @@ export function createInvestigation(input: {
   return inv
 }
 
+/** Refreshes a single investigation from the backend and updates the reactive store. */
+export async function refreshInvestigation(id: string): Promise<Investigation | null> {
+  const inv = invStore.get().find((i) => i.id === id)
+  if (inv?.sample) return inv
+
+  const backend = backendStore.get()
+  if (!backend.connected && backend.error) return inv ?? null
+
+  try {
+    const fresh = await api.getInvestigation(id)
+    const normalized: Investigation = {
+      ...fresh,
+      sample: false,
+      evidence: fresh.evidence ?? [],
+      riskIndicators: fresh.riskIndicators ?? [],
+      notes: fresh.notes ?? '',
+      savedReports: fresh.savedReports ?? [],
+    }
+    invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, ...normalized } : i)))
+    return normalized
+  } catch {
+    return null
+  }
+}
+
+// Active polling timers keyed by investigation id to avoid duplicate timers
+const activePollers = new Map<string, number>()
+
+/**
+ * Polls the backend every 3 seconds for an investigation while status is 'retrieving'.
+ * Automatically stops when terminal state is reached (completed, review, failed, etc.)
+ * or when max timeout is reached. Returns a cleanup function.
+ */
+export function startInvestigationPolling(
+  id: string,
+  opts?: {
+    intervalMs?: number
+    maxDurationMs?: number
+    onComplete?: (inv: Investigation) => void
+    onError?: (err: Error) => void
+  }
+): () => void {
+  // If already polling this investigation, return cleanup function for existing timer
+  if (activePollers.has(id)) {
+    return () => stopInvestigationPolling(id)
+  }
+
+  const intervalMs = opts?.intervalMs ?? 3000
+  const maxDurationMs = opts?.maxDurationMs ?? 200000 // ~200 seconds total (covers TinyFish 180s)
+  const startTime = Date.now()
+
+  const timerId = window.setInterval(async () => {
+    try {
+      const elapsed = Date.now() - startTime
+      if (elapsed >= maxDurationMs) {
+        stopInvestigationPolling(id)
+        const current = invStore.get().find((i) => i.id === id)
+        if (current && current.status === 'retrieving') {
+          void updateInvestigation(id, {
+            status: 'failed',
+            retrievalError: 'Retrieval timed out. You can retry from the investigation page.',
+            retrieval: {
+              status: 'failed',
+              completedAt: new Date().toISOString(),
+              message: 'Client-side timeout reached while waiting for retrieval.',
+            },
+          })
+        }
+        opts?.onError?.(new Error('Retrieval timed out.'))
+        return
+      }
+
+      const fresh = await refreshInvestigation(id)
+      if (!fresh) return
+
+      // Terminal states: status is no longer 'retrieving'
+      if (fresh.status !== 'retrieving') {
+        stopInvestigationPolling(id)
+        opts?.onComplete?.(fresh)
+      }
+    } catch {
+      // Ignore transient network errors, keep polling until timeout
+    }
+  }, intervalMs)
+
+  activePollers.set(id, timerId)
+
+  return () => stopInvestigationPolling(id)
+}
+
+export function stopInvestigationPolling(id: string) {
+  const timerId = activePollers.get(id)
+  if (timerId !== undefined) {
+    clearInterval(timerId)
+    activePollers.delete(id)
+  }
+}
+
 /** Runs TinyFish retrieval for an investigation and records the outcome honestly. */
 export async function runRetrieval(id: string) {
   const inv = invStore.get().find((i) => i.id === id)
   if (!inv) return
+  if (inv.sample) return
+
+  const backend = backendStore.get()
   const cfg = getConfig(getSettings())
+
+  if (backend.connected || !backend.error) {
+    void updateInvestigation(id, {
+      status: 'retrieving',
+      retrievalError: undefined,
+      retrieval: { status: 'retrieving', startedAt: new Date().toISOString() },
+    })
+    try {
+      await api.triggerRetrieval(id, {
+        tinyfishEndpoint: cfg.endpoint || undefined,
+        tinyfishApiKey: cfg.apiKey || undefined,
+      })
+      // Poll until retrieval completes (or fails / times out client-side)
+      startInvestigationPolling(id, {
+        onComplete: (fresh) => {
+          if (fresh.status === 'failed') {
+            toast('error', `Source Retrieval Failed: ${fresh.retrievalError || 'Unknown error'}`)
+          } else {
+            toast('success', `Sources retrieved for ${fresh.ref}.`)
+          }
+        },
+      })
+      return
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const isNetwork = msg.includes('Could not connect')
+      if (!isNetwork) {
+        toast('error', `Retrieval trigger failed: ${msg}`)
+        void updateInvestigation(id, {
+          status: 'failed',
+          retrievalError: msg,
+          retrieval: { status: 'failed', message: msg },
+        })
+        return
+      }
+      // Fall through to client-side retrieval if backend is offline
+    }
+  }
+
+  // Client retrieval fallback
   const startedAt = new Date().toISOString()
   if (!cfg.endpoint) {
     const message = 'No retrieval endpoint configured. Add a TinyFish endpoint in Settings to enable live source retrieval.'
-    updateInvestigation(id, { status: 'pending', retrievalError: undefined, retrieval: { status: 'not_configured', startedAt, completedAt: startedAt, message } })
+    void updateInvestigation(id, { status: 'pending', retrievalError: undefined, retrieval: { status: 'not_configured', startedAt, completedAt: startedAt, message } })
     toast('info', 'TinyFish is not configured. The investigation was saved without retrieval.')
     return
   }
-  updateInvestigation(id, { status: 'retrieving', retrievalError: undefined, retrieval: { status: 'retrieving', startedAt } })
+  void updateInvestigation(id, { status: 'retrieving', retrievalError: undefined, retrieval: { status: 'retrieving', startedAt } })
   const r = await retrieveEvidence(inv, cfg)
   const completedAt = new Date().toISOString()
   if (r.status === 'completed') {
     const evidence = r.evidence ?? []
-    updateInvestigation(id, {
+    void updateInvestigation(id, {
       evidence: [...inv.evidence.filter((e) => e.origin === 'user-provided'), ...evidence],
       summary: r.summary,
       riskIndicators: r.riskIndicators ?? [],
@@ -574,11 +902,12 @@ export async function runRetrieval(id: string) {
     updateSettings({ lastRetrievalAt: completedAt, lastRetrievalError: undefined })
     toast('success', `Sources retrieved for ${inv.ref}.`)
   } else {
-    updateInvestigation(id, { status: 'failed', retrievalError: r.message, retrieval: { status: 'failed', startedAt, completedAt, message: r.message } })
+    void updateInvestigation(id, { status: 'failed', retrievalError: r.message, retrieval: { status: 'failed', startedAt, completedAt, message: r.message } })
     updateSettings({ lastRetrievalAt: completedAt, lastRetrievalError: r.message })
     toast('error', `Source Retrieval Failed. ${r.message}`)
   }
 }
+
 
 export function retrievalStatusOf(inv: Investigation): RetrievalStatus | undefined {
   if (inv.status === 'retrieving') return 'retrieving'

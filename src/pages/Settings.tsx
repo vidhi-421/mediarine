@@ -2,18 +2,36 @@ import { useState } from 'react'
 import { Button, Card, CardHeader, Field, Icon, Notice, PageHeader, inputCls } from '../components/ui'
 import { replayOnboarding } from '../lib/onboarding'
 import { getConfig, testConnection } from '../lib/tinyfish'
-import { clearAll, removeSamples, updateSettings, useInvestigations, useSettings, type ThemePref } from '../lib/store'
+import { clearAll, removeSamples, updateSettings, useInvestigations, useSettings, useBackendStatus, syncWithBackend, type ThemePref } from '../lib/store'
+import { API_BASE_URL, checkBackendHealth } from '../lib/api'
 
 export default function SettingsPage() {
   const s = useSettings()
   const list = useInvestigations()
+  const backend = useBackendStatus()
   const [endpoint, setEndpoint] = useState(s.retrievalEndpoint)
   const [apiKey, setApiKey] = useState(s.tinyfishApiKey)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [testingBackend, setTestingBackend] = useState(false)
+  const [backendHealth, setBackendHealth] = useState<{ ok: boolean; message: string } | null>(null)
+  const [healthInfo, setHealthInfo] = useState<Awaited<ReturnType<typeof checkBackendHealth>> | null>(null)
   const [endpointErr, setEndpointErr] = useState('')
   const [saved, setSaved] = useState(false)
   const [confirm, setConfirm] = useState(false)
+
+  async function testBackend() {
+    setTestingBackend(true)
+    const h = await checkBackendHealth()
+    setHealthInfo(h)
+    if (h.ok) {
+      setBackendHealth({ ok: true, message: `FastAPI responded at ${API_BASE_URL} (v${h.version}, status: ${h.status}).` })
+      void syncWithBackend()
+    } else {
+      setBackendHealth({ ok: false, message: h.error || 'Connection failed.' })
+    }
+    setTestingBackend(false)
+  }
 
   function saveEndpoint(e: React.FormEvent) {
     e.preventDefault()
@@ -39,9 +57,12 @@ export default function SettingsPage() {
     { v: 'system', label: 'System', icon: 'settings' },
   ]
 
+  const realCount = list.filter((i) => !i.sample).length
+  const sampleCount = list.filter((i) => i.sample).length
+
   return (
     <>
-      <PageHeader title="Settings" desc="Appearance, retrieval service, profile, and local data." />
+      <PageHeader title="Settings" desc="Appearance, backend connection, retrieval service, and workspace data." />
       <div className="max-w-3xl space-y-6">
         <Card>
           <CardHeader title="Appearance" desc="System follows your device setting. Your choice is saved in this browser." />
@@ -60,12 +81,75 @@ export default function SettingsPage() {
           </div>
         </Card>
 
+        <Card>
+          <CardHeader title="FastAPI Backend Service" desc="Server providing database persistence, AI analysis, and evidence retrieval." />
+          <div className="space-y-4 p-5">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs font-medium text-muted">Backend API Endpoint</p>
+                <p className="tabular mt-1 font-mono text-sm">{API_BASE_URL}</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-muted">Connection Status</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <span className={`h-2.5 w-2.5 rounded-full ${backend.connected ? 'bg-success-fg' : 'bg-warn-fg'}`} />
+                  <span className="text-sm font-medium">{backend.connected ? 'Connected to FastAPI' : 'Offline (Demo Fallback)'}</span>
+                </div>
+              </div>
+            </div>
+            {backendHealth ? (
+              <Notice tone={backendHealth.ok ? 'info' : 'error'} title={backendHealth.ok ? 'Backend reachable' : 'Backend unreachable'}>
+                {backendHealth.message}
+              </Notice>
+            ) : backend.error ? (
+              <Notice tone="warn" title="Backend connection issue">
+                {backend.error}
+              </Notice>
+            ) : (
+              <Notice tone="info" title="Backend connected">
+                FastAPI server is connected and synchronizing investigations.
+              </Notice>
+            )}
+
+            {healthInfo?.ok && (
+              <div className="grid gap-3 pt-2 text-xs border-t border-line sm:grid-cols-3">
+                <div className="rounded-md border border-line bg-card p-3">
+                  <span className="font-semibold text-heading block">Database</span>
+                  <span className="text-muted block mt-0.5 truncate">{healthInfo.database?.mode || 'In-memory fallback'}</span>
+                  <span className={`inline-block mt-1.5 font-medium ${healthInfo.database?.connected ? 'text-success-fg' : 'text-warn-fg'}`}>
+                    {healthInfo.database?.connected ? 'Supabase active' : 'Fallback active'}
+                  </span>
+                </div>
+                <div className="rounded-md border border-line bg-card p-3">
+                  <span className="font-semibold text-heading block">Gemini AI</span>
+                  <span className="text-muted block mt-0.5">{healthInfo.gemini?.configured ? healthInfo.gemini.model : 'Rule-based fallback'}</span>
+                  <span className={`inline-block mt-1.5 font-medium ${healthInfo.gemini?.configured ? 'text-success-fg' : 'text-warn-fg'}`}>
+                    {healthInfo.gemini?.configured ? 'Live API ready' : 'Not configured'}
+                  </span>
+                </div>
+                <div className="rounded-md border border-line bg-card p-3">
+                  <span className="font-semibold text-heading block">TinyFish Retrieval</span>
+                  <span className="text-muted block mt-0.5">{healthInfo.tinyfish?.configured ? 'Endpoint configured' : 'Not configured'}</span>
+                  <span className={`inline-block mt-1.5 font-medium ${healthInfo.tinyfish?.configured ? 'text-success-fg' : 'text-warn-fg'}`}>
+                    {healthInfo.tinyfish?.configured ? 'Proxy active' : 'Not configured'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-3 border-t border-line px-5 py-4">
+            <Button type="button" loading={testingBackend || backend.loading} onClick={testBackend}>
+              <Icon name="refresh" size={14} />Check connection & sync
+            </Button>
+          </div>
+        </Card>
+
         <form onSubmit={saveEndpoint}>
           <Card>
             <CardHeader title="TinyFish evidence retrieval" desc="Endpoint that performs live web retrieval for claims." />
             <div className="space-y-4 p-5">
-              <Field label="Service endpoint URL" htmlFor="endpoint" error={endpointErr} hint="Medarina sends a POST request with the claim and expects JSON containing an evidence array. Keep API keys on the server behind this endpoint, not in the browser.">
-                <input id="endpoint" type="url" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} className={inputCls} placeholder="https://your-server.example/api/retrieve" />
+              <Field label="Service endpoint URL" htmlFor="endpoint" error={endpointErr} hint="Medarina sends a POST request with the claim and expects JSON containing an evidence array. Recommended backend proxy: http://localhost:8000/api/tinyfish/retrieve">
+                <input id="endpoint" type="url" value={endpoint} onChange={(e) => setEndpoint(e.target.value)} className={inputCls} placeholder="http://localhost:8000/api/tinyfish/retrieve" />
               </Field>
               <Field label="API key (optional)" htmlFor="apikey" hint="Sent as an X-API-Key header. Stored in this browser only; prefer a server-side proxy that holds the key.">
                 <input id="apikey" type="password" autoComplete="off" value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={inputCls} />
@@ -104,7 +188,7 @@ export default function SettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Local data" desc={`${list.length} investigation${list.length === 1 ? '' : 's'} stored in this browser.`} />
+          <CardHeader title="Workspace data" desc={`${realCount} active backend record${realCount === 1 ? '' : 's'} · ${sampleCount} demonstration sample${sampleCount === 1 ? '' : 's'}.`} />
           <div className="flex flex-wrap items-center gap-3 p-5">
             <Button onClick={removeSamples} disabled={!list.some((i) => i.sample)}>Remove sample investigations</Button>
             {confirm ? (

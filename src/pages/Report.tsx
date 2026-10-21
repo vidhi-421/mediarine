@@ -173,11 +173,14 @@ export default function Report({ id }: { id: string }) {
   const reviewer = settings.displayName || 'Reviewer'
   const saved = !!live.savedReports?.length
 
-  const persist = (silent = false) => {
+  const persist = async (silent = false) => {
     if (snap) return
-    const r = saveReport(live.id)
-    if (r) { if (!silent) toast('success', `Report saved to ${live.ref} history.`) }
-    else toast('error', 'The report could not be saved. Browser storage is unavailable or full.')
+    try {
+      const r = await saveReport(live.id)
+      if (r) { if (!silent) toast('success', `Report saved to ${live.ref} history.`) }
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'The report could not be saved.')
+    }
   }
 
   return (
@@ -185,11 +188,11 @@ export default function Report({ id }: { id: string }) {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 print:hidden">
         <a href={`#/investigations/${live.id}`} className="inline-flex items-center gap-1 text-[13px] text-muted hover:text-fg"><Icon name="left" size={14} />Back to {live.ref}</a>
         <div className="flex flex-wrap gap-2">
-          {!snap && <Button onClick={() => persist()}><Icon name="archive" size={16} />Save to history</Button>}
-          <Button onClick={() => { persist(true); window.print() }}><Icon name="printer" size={16} />Print Report</Button>
+          {!snap && <Button onClick={() => void persist()}><Icon name="archive" size={16} />Save to history</Button>}
+          <Button onClick={async () => { await persist(true); window.print() }}><Icon name="printer" size={16} />Print Report</Button>
           <Button variant="primary" loading={busy} onClick={async () => {
             setBusy(true)
-            try { persist(true); await exportReportPdf(inv, reviewer, generatedAt, true); toast('success', `Medarina-${inv.ref}.pdf downloaded.`) } catch { toast('error', 'The PDF could not be generated.') } finally { setBusy(false) }
+            try { await persist(true); await exportReportPdf(inv, reviewer, generatedAt, true); toast('success', `Medarina-${inv.ref}.pdf downloaded.`) } catch { toast('error', 'The PDF could not be generated.') } finally { setBusy(false) }
           }}><Icon name="download" size={16} />Export PDF</Button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ConfirmDialog, Icon, Logo, MenuItem, Popover, ToastHost } from './components/ui'
-import { applyTheme, resolveTheme, updateSettings, useInvestigations, useSettings, type ThemePref } from './lib/store'
+import { applyTheme, resolveTheme, updateSettings, useInvestigations, useSettings, useBackendStatus, syncWithBackend, type ThemePref } from './lib/store'
 import { navigate, useRoute } from './lib/router'
 import { signOut, useSession } from './lib/auth'
 import { toast } from './lib/toast'
@@ -111,6 +111,7 @@ function Notifications() {
 
 function Shell({ route }: { route: string }) {
   const settings = useSettings()
+  const backend = useBackendStatus()
   const session = useSession()!
   const dark = useThemeEffect()
   const collapsed = settings.sidebarCollapsed
@@ -225,6 +226,25 @@ function Shell({ route }: { route: string }) {
             </Popover>
           </div>
         </header>
+        {!backend.connected && !backend.loading && (
+          <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-8 print:hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-warn-bg px-4 py-2.5 text-xs text-warn-fg shadow-sm">
+              <div className="flex items-center gap-2">
+                <Icon name="alert" size={15} className="shrink-0" />
+                <span>
+                  <strong>Demo Fallback Mode:</strong> FastAPI backend at <code className="font-mono">{backend.endpoint}</code> is not connected. Local browser storage is active.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void syncWithBackend()}
+                className="font-medium underline hover:no-underline shrink-0"
+              >
+                Retry connection
+              </button>
+            </div>
+          </div>
+        )}
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-8 print:max-w-none print:p-0">{page}</main>
       </div>
 

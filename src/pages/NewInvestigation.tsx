@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Button, Card, CardHeader, ConfirmDialog, Field, Icon, Notice, PageHeader, Stepper, inputCls } from '../components/ui'
-import { CATEGORIES, createInvestigation, fmtMoney, runRetrieval, useSettings, type BillingCode, type CodeType, type TimelineEvent } from '../lib/store'
+import { CATEGORIES, createInvestigation, fmtMoney, useSettings, type BillingCode, type CodeType, type TimelineEvent } from '../lib/store'
 import { navigate, useQuery } from '../lib/router'
 import { toast } from '../lib/toast'
 
@@ -126,17 +126,24 @@ export default function NewInvestigation() {
     setConfirm(true)
   }
 
-  function submit() {
+  async function submit() {
     setBusy(true)
-    const inv = createInvestigation({
-      ...f,
-      billedAmount: Number(f.billedAmount),
-      billingCodes: f.codes.filter((c) => c.code.trim()).map((c) => ({ ...c, code: c.code.trim().toUpperCase(), description: c.description.trim() })),
-      clinicalTimeline: f.timeline.filter((t) => t.date && t.event.trim()).sort((a, b) => a.date.localeCompare(b.date)),
-    })
-    if (f.runNow) void runRetrieval(inv.id)
-    toast('success', `Investigation ${inv.ref} submitted.`)
-    navigate(`/investigations/${inv.id}`)
+    try {
+      const inv = await createInvestigation({
+        ...f,
+        billedAmount: Number(f.billedAmount),
+        billingCodes: f.codes.filter((c) => c.code.trim()).map((c) => ({ ...c, code: c.code.trim().toUpperCase(), description: c.description.trim() })),
+        clinicalTimeline: f.timeline.filter((t) => t.date && t.event.trim()).sort((a, b) => a.date.localeCompare(b.date)),
+        runNow: f.runNow,
+      })
+      setConfirm(false)
+      toast('success', `Investigation ${inv.ref} submitted.`)
+      navigate(`/investigations/${inv.id}`)
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'Failed to submit investigation.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const codesValid = f.codes.filter((c) => c.code.trim())

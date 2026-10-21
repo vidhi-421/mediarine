@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import EvidencePreview from '../components/EvidencePreview'
 import Workflow from '../components/Workflow'
 import { exportReportPdf, workflow } from '../lib/report'
 import { Button, Card, CardHeader, CLASS, ClassChip, ConfirmDialog, EmptyState, Field, Icon, Modal, Notice, OriginChip, PageHeader, RetrievalBadge, RetrievalChip, SampleChip, Spinner, StatusChip, STATUS, inputCls } from '../components/ui'
-import { addEvidence, archiveInvestigation, evidenceStatus, fmtDate, fmtMoney, retrievalStatusOf, OUTCOMES, type Evidence, removeInvestigation, runRetrieval, updateInvestigation, useInvestigations, useSettings, type Classification, type Investigation, type ReviewStatus } from '../lib/store'
+import { addEvidence, archiveInvestigation, evidenceStatus, fmtDate, fmtMoney, refreshInvestigation, retrievalStatusOf, OUTCOMES, type Evidence, removeInvestigation, runRetrieval, startInvestigationPolling, stopInvestigationPolling, updateInvestigation, useInvestigations, useSettings, type Classification, type Investigation, type ReviewStatus } from '../lib/store'
 import { navigate } from '../lib/router'
 import { toast } from '../lib/toast'
 import { RETRIEVAL_LABEL, type RetrievalStatus } from '../lib/tinyfish'
@@ -60,8 +60,9 @@ function verificationStatus(inv: Investigation) {
 function AddEvidence({ id, onClose }: { id: string; onClose: () => void }) {
   const [f, setF] = useState({ title: '', url: '', publisher: '', published: '', classification: 'unverified' as Classification, summary: '' })
   const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<any>) => setF({ ...f, [k]: e.target.value })
-  function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault()
     try {
       if (!f.title.trim()) throw new Error('Enter a source title.')
@@ -70,8 +71,16 @@ function AddEvidence({ id, onClose }: { id: string; onClose: () => void }) {
       setErr(x instanceof Error && x.message ? x.message : 'Enter a valid http or https URL.')
       return
     }
-    addEvidence(id, { title: f.title.trim(), url: f.url.trim(), publisher: f.publisher.trim() || new URL(f.url.trim()).hostname, published: f.published || undefined, classification: f.classification, summary: f.summary.trim(), retrieval: 'not_attempted', origin: 'user-provided' })
-    onClose()
+    setBusy(true)
+    try {
+      await addEvidence(id, { title: f.title.trim(), url: f.url.trim(), publisher: f.publisher.trim() || new URL(f.url.trim()).hostname, published: f.published || undefined, classification: f.classification, summary: f.summary.trim(), retrieval: 'not_attempted', origin: 'user-provided' })
+      toast('success', 'Evidence added.')
+      onClose()
+    } catch (x) {
+      setErr(x instanceof Error ? x.message : 'Failed to add evidence.')
+    } finally {
+      setBusy(false)
+    }
   }
   return (
     <Modal title="Add evidence" onClose={onClose}>
@@ -91,7 +100,7 @@ function AddEvidence({ id, onClose }: { id: string; onClose: () => void }) {
         {err && <p role="alert" className="text-sm text-crit-fg">{err}</p>}
         <div className="flex justify-end gap-3">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary">Add evidence</Button>
+          <Button type="submit" variant="primary" loading={busy}>Add evidence</Button>
         </div>
       </form>
     </Modal>
@@ -107,6 +116,23 @@ export default function InvestigationDetail({ id }: { id: string }) {
   const [preview, setPreview] = useState<Evidence | null>(null)
   const [pdfBusy, setPdfBusy] = useState(false)
   const settings = useSettings()
+
+  // Poll backend every 3 seconds while status is 'retrieving', stop on terminal status
+  useEffect(() => {
+    if (!inv || inv.sample) return
+
+    if (inv.status === 'retrieving') {
+      // Immediate fetch on mount in case retrieval finished while navigating
+      void refreshInvestigation(id)
+
+      const stop = startInvestigationPolling(id)
+      return () => {
+        stop()
+      }
+    } else {
+      stopInvestigationPolling(id)
+    }
+  }, [id, inv?.status, inv?.sample])
 
   if (!inv)
     return (
@@ -283,7 +309,18 @@ export default function InvestigationDetail({ id }: { id: string }) {
               </Field>
               <div className="border-t border-line pt-4">
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" onClick={() => (inv.archived ? (archiveInvestigation(inv.id, false), toast('success', `${inv.ref} restored.`)) : setConfirmArchive(true))}><Icon name="archive" size={14} />{inv.archived ? 'Restore' : 'Archive'}</Button>
+                  <Button size="sm" onClick={async () => {
+                    if (inv.archived) {
+                      try {
+                        await archiveInvestigation(inv.id, false)
+                        toast('success', `${inv.ref} restored.`)
+                      } catch (err) {
+                        toast('error', err instanceof Error ? err.message : 'Restore failed.')
+                      }
+                    } else {
+                      setConfirmArchive(true)
+                    }
+                  }}><Icon name="archive" size={14} />{inv.archived ? 'Restore' : 'Archive'}</Button>
                   <Button size="sm" variant="danger" onClick={() => setConfirmDel(true)}><Icon name="trash" size={14} />Delete</Button>
                 </div>
               </div>
@@ -293,8 +330,8 @@ export default function InvestigationDetail({ id }: { id: string }) {
       </div>
       {adding && <AddEvidence id={inv.id} onClose={() => setAdding(false)} />}
       {preview && <EvidencePreview evidence={preview} refLabel={inv.ref} onClose={() => setPreview(null)} />}
-      {confirmArchive && <ConfirmDialog title="Archive investigation" confirmLabel="Archive" body={`${inv.ref} will be hidden from the overview and default history view. You can restore it from the Archived view.`} onClose={() => setConfirmArchive(false)} onConfirm={() => { archiveInvestigation(inv.id, true); setConfirmArchive(false); toast('success', `${inv.ref} archived.`); navigate('/investigations') }} />}
-      {confirmDel && <ConfirmDialog danger title="Delete investigation" confirmLabel="Delete" body={`${inv.ref} and its evidence will be permanently removed from this browser. This cannot be undone.`} onClose={() => setConfirmDel(false)} onConfirm={() => { removeInvestigation(inv.id); toast('success', `${inv.ref} deleted.`); navigate('/investigations') }} />}
+      {confirmArchive && <ConfirmDialog title="Archive investigation" confirmLabel="Archive" body={`${inv.ref} will be hidden from the overview and default history view. You can restore it from the Archived view.`} onClose={() => setConfirmArchive(false)} onConfirm={async () => { try { await archiveInvestigation(inv.id, true); setConfirmArchive(false); toast('success', `${inv.ref} archived.`); navigate('/investigations') } catch (err) { toast('error', err instanceof Error ? err.message : 'Archive failed.') } }} />}
+      {confirmDel && <ConfirmDialog danger title="Delete investigation" confirmLabel="Delete" body={`${inv.ref} and its evidence will be permanently deleted. This cannot be undone.`} onClose={() => setConfirmDel(false)} onConfirm={async () => { try { await removeInvestigation(inv.id); toast('success', `${inv.ref} deleted.`); navigate('/investigations') } catch (err) { toast('error', err instanceof Error ? err.message : 'Delete failed.') } }} />}
     </>
   )
 }
