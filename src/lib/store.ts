@@ -527,6 +527,19 @@ export async function refreshTinyFishStatus(): Promise<TinyFishStoreState> {
 }
 
 
+export function normalizeInvestigation(i: any): Investigation {
+  return {
+    ...i,
+    sample: Boolean(i.sample),
+    evidence: Array.isArray(i.evidence) ? i.evidence : [],
+    riskIndicators: Array.isArray(i.riskIndicators) ? i.riskIndicators : [],
+    billingCodes: Array.isArray(i.billingCodes) ? i.billingCodes : [],
+    clinicalTimeline: Array.isArray(i.clinicalTimeline) ? i.clinicalTimeline : [],
+    savedReports: Array.isArray(i.savedReports) ? i.savedReports : [],
+    notes: i.notes ?? '',
+  }
+}
+
 /** Fetches real investigations from the FastAPI backend and merges with static samples. */
 export async function syncWithBackend(): Promise<boolean> {
   backendStore.set({ ...backendStore.get(), loading: true })
@@ -534,14 +547,7 @@ export async function syncWithBackend(): Promise<boolean> {
     const res = await api.listInvestigations({ limit: 500 })
     const backendItems: Investigation[] = (res.items || [])
       .filter((i: any) => !i.sample)
-      .map((i: any) => ({
-        ...i,
-        sample: false,
-        evidence: i.evidence ?? [],
-        riskIndicators: i.riskIndicators ?? [],
-        notes: i.notes ?? '',
-        savedReports: i.savedReports ?? [],
-      }))
+      .map(normalizeInvestigation)
     const samples = sampleData()
     invStore.set([...backendItems, ...samples])
     backendStore.set({
@@ -661,13 +667,14 @@ export function archiveInvestigation(id: string, archived: boolean): Promise<voi
 }
 
 export function evidenceStatus(inv: Investigation): string {
+  const ev = inv.evidence ?? []
   if (inv.status === 'retrieving') return 'Retrieving Sources'
-  if (inv.status === 'failed' && !inv.evidence.some((e) => e.retrieval === 'retrieved')) return 'Retrieval Failed'
-  if (!inv.evidence.length) return 'No Evidence'
-  const r = inv.evidence.filter((e) => e.retrieval === 'retrieved').length
-  if (r === inv.evidence.length) return 'Sources Retrieved'
+  if (inv.status === 'failed' && !ev.some((e) => e.retrieval === 'retrieved')) return 'Retrieval Failed'
+  if (!ev.length) return 'No Evidence'
+  const r = ev.filter((e) => e.retrieval === 'retrieved').length
+  if (r === ev.length) return 'Sources Retrieved'
   if (r > 0) return 'Partially Retrieved'
-  return inv.evidence.every((e) => e.origin === 'user-provided') ? 'Reviewer-Provided' : 'Retrieval Failed'
+  return ev.every((e) => e.origin === 'user-provided') ? 'Reviewer-Provided' : 'Retrieval Failed'
 }
 
 export function removeSamples() {
@@ -743,14 +750,7 @@ export async function createInvestigation(input: {
   if (backend.connected || !backend.error) {
     try {
       const created = await api.createInvestigation(payload)
-      const inv: Investigation = {
-        ...created,
-        sample: false,
-        evidence: created.evidence ?? [],
-        riskIndicators: created.riskIndicators ?? [],
-        notes: created.notes ?? '',
-        savedReports: created.savedReports ?? [],
-      }
+      const inv: Investigation = normalizeInvestigation(created)
       invStore.set([inv, ...invStore.get().filter((i) => i.id !== inv.id)])
       backendStore.set({ ...backendStore.get(), connected: true, error: null })
       return inv
@@ -796,26 +796,24 @@ export async function createInvestigation(input: {
 
 /** Refreshes a single investigation from the backend and updates the reactive store. */
 export async function refreshInvestigation(id: string): Promise<Investigation | null> {
-  const inv = invStore.get().find((i) => i.id === id)
+  const inv = invStore.get().find((i) => i.id === id || i.ref === id)
   if (inv?.sample) return inv
-
-  const backend = backendStore.get()
-  if (!backend.connected && backend.error) return inv ?? null
 
   try {
     const fresh = await api.getInvestigation(id)
-    const normalized: Investigation = {
-      ...fresh,
-      sample: false,
-      evidence: fresh.evidence ?? [],
-      riskIndicators: fresh.riskIndicators ?? [],
-      notes: fresh.notes ?? '',
-      savedReports: fresh.savedReports ?? [],
+    const normalized: Investigation = normalizeInvestigation(fresh)
+    const list = invStore.get()
+    const index = list.findIndex((i) => i.id === normalized.id || i.ref === normalized.ref)
+    if (index >= 0) {
+      const copy = [...list]
+      copy[index] = { ...copy[index], ...normalized }
+      invStore.set(copy)
+    } else {
+      invStore.set([normalized, ...list])
     }
-    invStore.set(invStore.get().map((i) => (i.id === id ? { ...i, ...normalized } : i)))
     return normalized
   } catch {
-    return null
+    return inv ?? null
   }
 }
 

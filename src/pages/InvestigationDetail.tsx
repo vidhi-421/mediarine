@@ -171,7 +171,7 @@ function RetrievalPanel({
             <span>
               Sources retrieved:{' '}
               <strong className="text-fg">
-                {inv.evidence.filter((e) => e.provider === 'tinyfish' || e.origin === 'live-source').length}
+                {(inv.evidence ?? []).filter((e) => e.provider === 'tinyfish' || e.origin === 'live-source').length}
               </strong>
             </span>
             <button
@@ -330,7 +330,7 @@ function RetrievalPanel({
               </span>
             )}
             <span className="tabular text-muted">
-              {inv.evidence.length} evidence source{inv.evidence.length === 1 ? '' : 's'} recorded
+              {(inv.evidence ?? []).length} evidence source{(inv.evidence ?? []).length === 1 ? '' : 's'} recorded
             </span>
           </div>
         </div>
@@ -382,8 +382,9 @@ function RetrievalPanel({
 }
 
 function verificationStatus(inv: Investigation) {
-  const c = (k: Classification) => inv.evidence.filter((e) => e.classification === k).length
-  if (!inv.evidence.length)
+  const evidence = inv.evidence ?? []
+  const c = (k: Classification) => evidence.filter((e) => e.classification === k).length
+  if (!evidence.length)
     return {
       title: 'Not yet assessed',
       text: 'No evidence has been retrieved or added, so no assessment can be made.',
@@ -525,7 +526,8 @@ function AddEvidence({ id, onClose }: { id: string; onClose: () => void }) {
 }
 
 export default function InvestigationDetail({ id }: { id: string }) {
-  const inv = useInvestigations().find((i) => i.id === id)
+  const inv = useInvestigations().find((i) => i.id === id || i.ref === id)
+  const [fetching, setFetching] = useState(!inv)
   const [filter, setFilter] = useState<'all' | Classification>('all')
   const [adding, setAdding] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
@@ -534,6 +536,21 @@ export default function InvestigationDetail({ id }: { id: string }) {
   const [pdfBusy, setPdfBusy] = useState(false)
   const [savingReport, setSavingReport] = useState(false)
   const settings = useSettings()
+
+  useEffect(() => {
+    if (!inv && id) {
+      let active = true
+      setFetching(true)
+      refreshInvestigation(id).finally(() => {
+        if (active) setFetching(false)
+      })
+      return () => {
+        active = false
+      }
+    } else {
+      setFetching(false)
+    }
+  }, [id, !inv])
 
   // Track real elapsed time every second while retrieval is active
   const [now, setNow] = useState(Date.now())
@@ -563,6 +580,18 @@ export default function InvestigationDetail({ id }: { id: string }) {
     }
   }, [id, inv?.status, inv?.sample])
 
+  if (fetching) {
+    return (
+      <Card>
+        <div className="flex flex-col items-center justify-center p-12 text-center">
+          <Spinner size={32} />
+          <p className="mt-4 text-sm font-medium text-heading">Loading investigation details...</p>
+          <p className="mt-1 text-xs text-muted">Retrieving claim information and evidence records</p>
+        </div>
+      </Card>
+    )
+  }
+
   if (!inv)
     return (
       <Card>
@@ -578,6 +607,10 @@ export default function InvestigationDetail({ id }: { id: string }) {
       </Card>
     )
 
+  const evidence = inv.evidence ?? []
+  const riskIndicators = inv.riskIndicators ?? []
+  const billingCodes = inv.billingCodes ?? []
+  const clinicalTimeline = inv.clinicalTimeline ?? []
   const hasSavedReport = !!inv.savedReports?.length
   const stages = workflow(inv, hasSavedReport)
 
@@ -588,10 +621,10 @@ export default function InvestigationDetail({ id }: { id: string }) {
       ? { label: 'Review Decision Complete' }
       : stages.find((s) => s.state === 'not_started'))
 
-  const counts = (k: Classification) => inv.evidence.filter((e) => e.classification === k).length
-  const shown = inv.evidence.filter((e) => filter === 'all' || e.classification === filter)
+  const counts = (k: Classification) => evidence.filter((e) => e.classification === k).length
+  const shown = evidence.filter((e) => filter === 'all' || e.classification === filter)
   const vs = verificationStatus(inv)
-  const retrievedN = inv.evidence.filter((e) => e.retrieval === 'retrieved').length
+  const retrievedN = evidence.filter((e) => e.retrieval === 'retrieved').length
 
   // Determine analysis engine origin: backend saves 'analysisSource' in retrieval JSONB
   const analysisEngine =
@@ -731,7 +764,7 @@ export default function InvestigationDetail({ id }: { id: string }) {
           >
             {inv.retrievalError ?? 'Sources could not be retrieved from the target URL.'}{' '}
             {!inv.sample &&
-              !inv.evidence.length &&
+              !evidence.length &&
               'You can retry retrieval or manually add verified evidence to complete the review.'}
           </Notice>
         </div>
@@ -766,7 +799,7 @@ export default function InvestigationDetail({ id }: { id: string }) {
           {/* Live Evidence Retrieval Card */}
           <RetrievalPanel inv={inv} elapsedSec={elapsedSec} />
 
-          {(inv.billingCodes?.length || inv.clinicalTimeline?.length) ? (
+          {(billingCodes.length > 0 || clinicalTimeline.length > 0) ? (
             <Card>
               <CardHeader
                 title="Billing and Clinical Context"
@@ -779,12 +812,13 @@ export default function InvestigationDetail({ id }: { id: string }) {
                           : ''
                       }`,
                     inv.billedAmount != null && `Billed: ${fmtMoney(inv.billedAmount)}`,
+                    billingCodes.length > 0 && `${billingCodes.length} procedure and diagnosis code(s) on record`,
                   ]
                     .filter(Boolean)
                     .join(' · ') || undefined
                 }
               />
-              {!!inv.billingCodes?.length && (
+              {billingCodes.length > 0 && (
                 <table className="w-full text-sm">
                   <thead className="border-b border-line bg-sage text-xs text-muted">
                     <tr>
@@ -800,7 +834,7 @@ export default function InvestigationDetail({ id }: { id: string }) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
-                    {inv.billingCodes.map((c, k) => (
+                    {billingCodes.map((c, k) => (
                       <tr key={k}>
                         <td className="tabular px-5 py-2.5 font-medium">{c.code}</td>
                         <td className="px-5 py-2.5 text-muted">{c.type}</td>
@@ -810,9 +844,9 @@ export default function InvestigationDetail({ id }: { id: string }) {
                   </tbody>
                 </table>
               )}
-              {!!inv.clinicalTimeline?.length && (
+              {clinicalTimeline.length > 0 && (
                 <ol className="relative space-y-3 border-t border-line p-5">
-                  {inv.clinicalTimeline.map((t, k) => (
+                  {clinicalTimeline.map((t, k) => (
                     <li key={k} className="flex gap-3 text-sm">
                       <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />
                       <span className="tabular w-28 shrink-0 text-muted">{fmtDate(t.date)}</span>
@@ -887,7 +921,7 @@ export default function InvestigationDetail({ id }: { id: string }) {
               )}
 
               <p className="text-xs text-muted">
-                Source coverage: {retrievedN} of {inv.evidence.length} sources retrieved. This
+                Source coverage: {retrievedN} of {evidence.length} sources retrieved. This
                 assessment aggregates classified evidence only; clinical decisions are made by human reviewers.
               </p>
             </div>
@@ -927,14 +961,14 @@ export default function InvestigationDetail({ id }: { id: string }) {
                         : 'border-line text-muted hover:bg-sage'
                     }`}
                   >
-                    {k === 'all' ? `All Sources (${inv.evidence.length})` : `${CLASS[k].label} (${counts(k)})`}
+                    {k === 'all' ? `All Sources (${evidence.length})` : `${CLASS[k].label} (${counts(k)})`}
                   </button>
                 ),
               )}
             </div>
 
             {/* Live Loading Skeleton while retrieving */}
-            {inv.status === 'retrieving' && !inv.evidence.length ? (
+            {inv.status === 'retrieving' && !evidence.length ? (
               <div className="space-y-4 p-5">
                 <div className="flex items-center gap-3 text-sm text-muted">
                   <Spinner size={18} className="text-primary" />
@@ -957,7 +991,7 @@ export default function InvestigationDetail({ id }: { id: string }) {
                 icon="sources"
                 title="No Evidence Sources Recorded"
                 desc={
-                  inv.evidence.length
+                  evidence.length
                     ? 'No evidence matches the selected classification filter.'
                     : 'Evidence sources will appear here automatically when TinyFish retrieval finishes or when added manually.'
                 }
@@ -1101,9 +1135,9 @@ export default function InvestigationDetail({ id }: { id: string }) {
           <Card>
             <CardHeader title="Risk Indicators" />
             <div className="p-5 text-sm">
-              {inv.riskIndicators.length ? (
+              {riskIndicators.length ? (
                 <ul className="space-y-2.5">
-                  {inv.riskIndicators.map((r) => (
+                  {riskIndicators.map((r) => (
                     <li key={r} className="flex items-start gap-2 text-fg">
                       <Icon name="alert" size={16} className="mt-0.5 shrink-0 text-warn" />
                       <span>{r}</span>

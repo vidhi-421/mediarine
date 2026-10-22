@@ -67,7 +67,7 @@ export function ReportDocument({
 }) {
   const tf = tinyfishSection(inv)
   const fs = findings(inv)
-  const other = inv.evidence.filter((e) => e.provider !== 'tinyfish')
+  const other = (inv.evidence ?? []).filter((e) => e.provider !== 'tinyfish')
   const th = 'px-3.5 py-2.5 text-left font-bold text-xs uppercase tracking-wider'
   const td = 'px-3.5 py-2.5 align-top text-xs'
 

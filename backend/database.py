@@ -190,6 +190,14 @@ def _from_snake(row: dict) -> dict:
     result: dict = {}
     for k, v in row.items():
         result[mapping.get(k, k)] = v
+    if result.get("evidence") is None:
+        result["evidence"] = []
+    if result.get("riskIndicators") is None:
+        result["riskIndicators"] = []
+    if result.get("billingCodes") is None:
+        result["billingCodes"] = []
+    if result.get("clinicalTimeline") is None:
+        result["clinicalTimeline"] = []
     return result
 
 

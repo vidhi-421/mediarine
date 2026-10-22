@@ -10,20 +10,27 @@
 [![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com)
 [![TinyFish](https://img.shields.io/badge/TinyFish-Live--Web_Automation-blueviolet)](https://tinyfish.ai)
 [![Google Gemini](https://img.shields.io/badge/Google_Gemini-Clinical_Synthesis-orange?logo=google&logoColor=white)](https://ai.google.dev)
-[![Tests](https://img.shields.io/badge/Tests-23%20Passed-brightgreen)](backend/tests/test_api.py)
+[![Tests](https://img.shields.io/badge/Tests-25%20Passed-brightgreen)](backend/tests/test_api.py)
+
+---
+
+## Demo Video
+
+[Watch the Medarina Demo Video on YouTube](https://youtu.be/948ZUmFrdPY)
 
 ---
 
 ## Table of Contents
-1. [Problem Statement & Impact](#1-problem-statement--impact)
-2. [TinyFish Integration: Autonomous Web Automation](#2-tinyfish-integration-autonomous-web-automation)
-3. [System Architecture & 7-Stage Workflow](#3-system-architecture--7-stage-workflow)
-4. [Market Sizing & Revenue Economics](#4-market-sizing--revenue-economics)
-5. [Social Media Post & 2-Minute Demo Presentation](#5-social-media-post--2-minute-demo-presentation)
-6. [Quick Start & Local Reproduction](#6-quick-start--local-reproduction)
-7. [Automated Verification & Test Suite](#7-automated-verification--test-suite)
-8. [Responsible Use, Limitations & Security](#8-responsible-use-limitations--security)
-9. [Submission Checklist & License](#9-submission-checklist--license)
+1. [Demo Video](#demo-video)
+2. [Problem Statement & Impact](#1-problem-statement--impact)
+3. [TinyFish Integration: Autonomous Web Automation](#2-tinyfish-integration-autonomous-web-automation)
+4. [System Architecture & 7-Stage Workflow](#3-system-architecture--7-stage-workflow)
+5. [Market Sizing & Revenue Economics](#4-market-sizing--revenue-economics)
+6. [Social Media Post & 2-Minute Demo Presentation](#5-social-media-post--2-minute-demo-presentation)
+7. [Quick Start & Local Reproduction](#6-quick-start--local-reproduction)
+8. [Automated Verification & Test Suite](#7-automated-verification--test-suite)
+9. [Responsible Use, Limitations & Security](#8-responsible-use-limitations--security)
+10. [Submission Checklist & License](#9-submission-checklist--license)
 
 ---
 
@@ -234,7 +241,7 @@ npm run dev
 
 The project includes automated test coverage for backend API routes, database operations, reference lookups, and TinyFish integrations:
 
-### Run Backend Unit & Integration Tests (23 Passed)
+### Run Backend Unit & Integration Tests (25 Passed)
 ```bash
 python -m pytest backend/tests/ -v
 ```
@@ -273,8 +280,9 @@ Compiles with Vite and TypeScript without warnings or errors.
 ## 9. Submission Checklist & License
 
 - [x] **Public GitHub Repository**: Working codebase with visible git history at [https://github.com/vidhi-421/mediarine](https://github.com/vidhi-421/mediarine)
+- [x] **Demo Video**: [Watch the Medarina Demo Video on YouTube](https://youtu.be/948ZUmFrdPY)
 - [x] **TinyFish Live Integration**: Deeply integrated autonomous web agent for regulatory policy retrieval
-- [x] **Passing Test Suite**: 23 backend tests passed; production Vite build verified
+- [x] **Passing Test Suite**: 25 backend tests passed; production Vite build verified
 - [x] **Social Media Content**: LinkedIn / X post text ready with problem statement and architecture
 - [x] **Demo Video Script**: 2-minute walkthrough detailing the 7-stage workflow and live retrieval
 - [x] **Zero Secret Leakage**: Fully audited diff with zero committed credentials

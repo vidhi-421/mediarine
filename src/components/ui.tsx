@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { Component, useEffect, useRef, useState, type ButtonHTMLAttributes, type ErrorInfo, type ReactNode } from 'react'
 import { dismissToast, useToasts } from '../lib/toast'
 import type { Classification, Origin, RetrievalState, ReviewStatus } from '../lib/store'
 
@@ -347,4 +347,60 @@ export function RetrievalBadge({ status }: { status?: string }) {
   if (!status) return <span className="text-xs text-muted">—</span>
   const r = RET[status]
   return <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ${r.cls}`}>{status === 'retrieving' && <Spinner size={10} />}{r.label}</span>
+}
+
+interface ErrorBoundaryProps {
+  children: ReactNode
+  fallback?: ReactNode
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean
+  error: Error | null
+}
+
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, error: null }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Unhandled UI error caught by ErrorBoundary:', error, errorInfo)
+  }
+
+  reset = () => {
+    this.setState({ hasError: false, error: null })
+  }
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) return this.props.fallback
+      return (
+        <div className="rounded-xl border border-crit/30 bg-card p-6 shadow-card my-6">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-crit-bg p-2 text-crit-fg">
+              <Icon name="alert" size={20} />
+            </div>
+            <div className="flex-1 space-y-2">
+              <h3 className="text-base font-semibold text-heading">An unexpected error occurred</h3>
+              <p className="text-sm text-muted">
+                {this.state.error?.message || 'Something went wrong while rendering this section.'}
+              </p>
+              <div className="flex gap-2 pt-2">
+                <Button variant="primary" onClick={this.reset}>
+                  Try again
+                </Button>
+                <a href="#/">
+                  <Button variant="ghost">Return to Overview</Button>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }

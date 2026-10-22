@@ -37,12 +37,13 @@ export function verificationQuestions(inv: Investigation): string[] {
   return q
 }
 
-export const tinyfishEvidence = (inv: Investigation) => inv.evidence.filter((e) => e.provider === 'tinyfish')
+export const tinyfishEvidence = (inv: Investigation) => (inv.evidence ?? []).filter((e) => e.provider === 'tinyfish')
 
 export function workflow(inv: Investigation, hasSavedReport: boolean): Stage[] {
   const rs = retrievalStatusOf(inv)
   const tf = tinyfishEvidence(inv)
-  const classified = inv.evidence.filter((e) => e.retrieval !== 'failed')
+  const evidence = inv.evidence ?? []
+  const classified = evidence.filter((e) => e.retrieval !== 'failed')
   const decided = Boolean((inv.outcome && inv.outcome !== 'Not determined') || inv.status === 'completed')
 
   // Stage 3: Retrieval State
@@ -69,10 +70,10 @@ export function workflow(inv: Investigation, hasSavedReport: boolean): Stage[] {
   }
 
   // Stage 4: Collection State
-  const collectionState: StageState = inv.evidence.length > 0 ? 'completed' : rs === 'retrieving' ? 'in_progress' : 'not_started'
-  const collectionStatus = inv.evidence.length > 0 ? 'Completed' : rs === 'retrieving' ? 'In Progress' : 'Not Started'
-  const collectionNote = inv.evidence.length > 0
-    ? `${inv.evidence.length} source${inv.evidence.length === 1 ? '' : 's'} on record`
+  const collectionState: StageState = evidence.length > 0 ? 'completed' : rs === 'retrieving' ? 'in_progress' : 'not_started'
+  const collectionStatus = evidence.length > 0 ? 'Completed' : rs === 'retrieving' ? 'In Progress' : 'Not Started'
+  const collectionNote = evidence.length > 0
+    ? `${evidence.length} source${evidence.length === 1 ? '' : 's'} on record`
     : rs === 'retrieving' ? 'Collecting live sources...' : 'No sources recorded'
 
   // Stage 5: Comparison / Evidence Analysis State
@@ -132,13 +133,15 @@ const basis = (e: Evidence) => `${e.provider === 'tinyfish' ? 'TinyFish live-web
 
 export function findings(inv: Investigation): Findings {
   const f = (e: Evidence): Finding => ({ title: e.verifies ? `${e.verifies}` : e.title, detail: `${e.summary || 'No summary recorded.'} ${basis(e)}`, evidence: e })
-  const by = (k: Evidence['classification'][]) => inv.evidence.filter((e) => k.includes(e.classification) && e.retrieval !== 'failed').map(f)
-  const conflicting = inv.evidence.filter((e) => e.classification === 'conflicting')
+  const evidence = inv.evidence ?? []
+  const riskIndicators = inv.riskIndicators ?? []
+  const by = (k: Evidence['classification'][]) => evidence.filter((e) => k.includes(e.classification) && e.retrieval !== 'failed').map(f)
+  const conflicting = evidence.filter((e) => e.classification === 'conflicting')
   return {
     supported: by(['verified']),
     conflicting: by(['conflicting']),
     unverified: by(['unverified', 'inconclusive']),
-    risks: inv.riskIndicators.map((r) => ({
+    risks: riskIndicators.map((r) => ({
       title: r,
       detail: conflicting.length ? `Recorded on the investigation. Related conflicting evidence: ${conflicting.map((e) => e.title).join('; ')}.` : 'Recorded on the investigation; not linked to a specific source.',
     })),

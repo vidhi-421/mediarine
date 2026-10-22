@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ConfirmDialog, Icon, Logo, MenuItem, Popover, ToastHost } from './components/ui'
+import { ConfirmDialog, ErrorBoundary, Icon, Logo, MenuItem, Popover, ToastHost } from './components/ui'
 import { applyTheme, resolveTheme, updateSettings, useInvestigations, useSettings, useBackendStatus, useTinyFishStatus, syncWithBackend, type ThemePref } from './lib/store'
 import { navigate, useRoute } from './lib/router'
 import { signOut, useSession } from './lib/auth'
@@ -312,7 +312,9 @@ function Shell({ route }: { route: string }) {
             </div>
           </div>
         )}
-        <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-8 print:max-w-none print:p-0">{page}</main>
+        <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-8 print:max-w-none print:p-0">
+          <ErrorBoundary key={route}>{page}</ErrorBoundary>
+        </main>
       </div>
 
       {onboarding.open && <Onboarding onClose={onboarding.finish} />}
