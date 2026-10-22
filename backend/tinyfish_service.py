@@ -30,7 +30,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 75  # seconds for live-web agent execution
+TIMEOUT = 180  # seconds for live-web agent execution (allows CMS and real browser extraction to complete)
 
 _TINYFISH_ENDPOINT = os.getenv("TINYFISH_ENDPOINT", "").strip()
 _TINYFISH_API_KEY = os.getenv("TINYFISH_API_KEY", "").strip()
@@ -98,7 +98,8 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
             "recommendation": str,
         }
     """
-    if endpoint is not None:
+    # Prevent routing to local backend proxy loopback
+    if endpoint is not None and not any(h in endpoint.lower() for h in ("localhost:8000", "127.0.0.1:8000")):
         ep = endpoint
     else:
         ep = os.getenv("TINYFISH_ENDPOINT", None)
@@ -106,7 +107,7 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
             ep = _TINYFISH_ENDPOINT
     ep = (ep or "").strip()
 
-    if api_key is not None:
+    if api_key is not None and api_key.strip():
         key = api_key
     else:
         key = os.getenv("TINYFISH_API_KEY", None)
@@ -124,18 +125,28 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
         }
 
     ep = normalize_endpoint(ep)
-    target_url = inv.get("sourceUrl") or "https://example.com"
+    raw_target = (inv.get("sourceUrl") or "").strip()
+    # If target URL is the generic CMS portal root without path, target the specific fee schedule policy page
+    if not raw_target or raw_target.rstrip("/").lower() in ("https://www.cms.gov", "http://www.cms.gov", "https://cms.gov", "http://cms.gov"):
+        target_url = "https://www.cms.gov/medicare/payment/fee-schedules/physician"
+    else:
+        target_url = raw_target
+
     if "agent.tinyfish.ai" in ep.lower():
-        # TinyFish Web Agent API format: requires 'url' and 'goal'
-        codes_str = ", ".join(
-            (c.get("code", "") if isinstance(c, dict) else str(c))
+        # TinyFish Web Agent API format: requires 'url' and bounded 'goal'
+        codes_list = [
+            (c.get("code", "") if isinstance(c, dict) else str(c)).strip()
             for c in (inv.get("billingCodes") or [])
-        )
-        claim_text = inv.get("claim", "")
+            if (c.get("code") if isinstance(c, dict) else str(c))
+        ]
+        codes_str = ", ".join(codes_list[:4])
+        claim_brief = (inv.get("claim") or "").strip()
+        if len(claim_brief) > 130:
+            claim_brief = claim_brief[:127] + "..."
         goal = (
-            f"Extract the page title and an overview summary of clinical, billing, or healthcare policy guidelines from this page related to: '{claim_text}'. "
-            f"{f'Relevant billing codes: {codes_str}. ' if codes_str else ''}"
-            f"Do not navigate away from this page or browse external links. "
+            f"Extract the page title and an overview summary of clinical, billing, or healthcare policy guidelines from this page related to: '{claim_brief}'. "
+            f"{f'If billing codes ({codes_str}) are directly visible on this page, cite them; otherwise immediately summarize the general fee schedule policies and rules visible on this page. ' if codes_str else ''}"
+            f"Do not click links, do not navigate away, and do not use search forms. "
             f"Return a JSON object with keys: title, summary, recommendation."
         )
         payload = {
@@ -199,9 +210,11 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
     extracted_summary = data.get("summary")
     extracted_risks = data.get("riskIndicators") or []
     extracted_rec = data.get("recommendation")
+    extracted_title = None
 
     if raw_evidence is None and isinstance(data.get("result"), dict):
         raw_evidence = data["result"].get("evidence")
+        extracted_title = data["result"].get("title")
         if not extracted_summary:
             extracted_summary = data["result"].get("summary")
         if not extracted_risks:
@@ -215,6 +228,7 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
             parsed_res = json.loads(data["result"])
             if isinstance(parsed_res, dict):
                 raw_evidence = parsed_res.get("evidence")
+                extracted_title = parsed_res.get("title")
                 if not extracted_summary:
                     extracted_summary = parsed_res.get("summary")
                 if not extracted_risks:
@@ -265,7 +279,7 @@ async def retrieve_evidence(inv: dict, endpoint: Optional[str] = None, api_key: 
 
     # If TinyFish returned a summary result but no separate evidence items, create a structured live evidence item
     if not evidence and extracted_summary:
-        title_from_result = (data.get("result", {}).get("title") if isinstance(data.get("result"), dict) else None)
+        title_from_result = extracted_title or (data.get("result", {}).get("title") if isinstance(data.get("result"), dict) else None)
         hostname = target_url.split("/")[2] if "/" in target_url else "Web Source"
         evidence.append({
             "id": str(uuid.uuid4()),

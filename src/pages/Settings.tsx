@@ -2,13 +2,14 @@ import { useState } from 'react'
 import { Button, Card, CardHeader, Field, Icon, Notice, PageHeader, inputCls } from '../components/ui'
 import { replayOnboarding } from '../lib/onboarding'
 import { getConfig, testConnection } from '../lib/tinyfish'
-import { clearAll, removeSamples, updateSettings, useInvestigations, useSettings, useBackendStatus, syncWithBackend, type ThemePref } from '../lib/store'
-import { API_BASE_URL, checkBackendHealth } from '../lib/api'
+import { clearAll, removeSamples, updateSettings, useInvestigations, useSettings, useBackendStatus, useTinyFishStatus, refreshTinyFishStatus, syncWithBackend, type ThemePref } from '../lib/store'
+import { API_BASE_URL, checkBackendHealth, runTinyFishDiagnostics, type TinyFishDiagnosticResult } from '../lib/api'
 
 export default function SettingsPage() {
   const s = useSettings()
   const list = useInvestigations()
   const backend = useBackendStatus()
+  const tfStatus = useTinyFishStatus()
   const [endpoint, setEndpoint] = useState(s.retrievalEndpoint)
   const [apiKey, setApiKey] = useState(s.tinyfishApiKey)
   const [testing, setTesting] = useState(false)
@@ -16,6 +17,9 @@ export default function SettingsPage() {
   const [testingBackend, setTestingBackend] = useState(false)
   const [backendHealth, setBackendHealth] = useState<{ ok: boolean; message: string } | null>(null)
   const [healthInfo, setHealthInfo] = useState<Awaited<ReturnType<typeof checkBackendHealth>> | null>(null)
+  const [diagUrl, setDiagUrl] = useState('https://example.com')
+  const [diagLoading, setDiagLoading] = useState(false)
+  const [diagResult, setDiagResult] = useState<TinyFishDiagnosticResult | null>(null)
   const [endpointErr, setEndpointErr] = useState('')
   const [saved, setSaved] = useState(false)
   const [confirm, setConfirm] = useState(false)
@@ -167,6 +171,147 @@ export default function SettingsPage() {
             </div>
           </Card>
         </form>
+
+        <Card className="border-emerald/60">
+          <CardHeader
+            title="TinyFish Integration Diagnostics"
+            desc="Safe live verification of endpoint reachability and automated browser extraction"
+            action={
+              <Button size="sm" variant="ghost" onClick={() => void refreshTinyFishStatus()}>
+                <Icon name="refresh" size={14} /> Refresh Status
+              </Button>
+            }
+          />
+          <div className="space-y-4 p-5 text-sm">
+            {/* Status overview */}
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-line bg-card p-3.5">
+                <span className="text-xs text-muted block">Connection Status</span>
+                <span className={`inline-flex items-center gap-1.5 mt-1 text-sm font-semibold ${
+                  tfStatus.status === 'connected' ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'
+                }`}>
+                  <span className={`h-2 w-2 rounded-full ${
+                    tfStatus.status === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`} />
+                  {tfStatus.status === 'connected' ? 'Connected & Authenticated' : tfStatus.status === 'checking' ? 'Checking...' : 'Unavailable'}
+                </span>
+                <span className="text-[11px] text-muted block mt-1">{tfStatus.pingMessage || 'API ping check passed'}</span>
+              </div>
+
+              <div className="rounded-lg border border-line bg-card p-3.5">
+                <span className="text-xs text-muted block">Service Mode</span>
+                <span className="text-sm font-semibold text-heading block mt-1">Autonomous Web Agent</span>
+                <span className="text-[11px] font-mono text-muted block mt-1 truncate">{tfStatus.endpoint || 'https://agent.tinyfish.ai/v1/automation/run'}</span>
+              </div>
+
+              <div className="rounded-lg border border-line bg-card p-3.5">
+                <span className="text-xs text-muted block">Last Crawler Run</span>
+                <span className="text-sm font-semibold text-heading block mt-1">
+                  {tfStatus.lastRun?.status ? `${tfStatus.lastRun.status.toUpperCase()} (${tfStatus.lastRun.sourceCount} sources)` : 'No recent run'}
+                </span>
+                <span className="text-[11px] text-muted block mt-1">
+                  {tfStatus.lastRun?.durationSeconds ? `Execution time: ${tfStatus.lastRun.durationSeconds}s` : 'Awaiting live trigger'}
+                </span>
+              </div>
+            </div>
+
+            {/* Distinction explanation */}
+            <div className="rounded-md border border-line bg-sage/40 p-3.5 text-xs space-y-1.5">
+              <div className="flex items-center gap-2 font-medium text-heading">
+                <Icon name="sparkles" size={14} className="text-primary" />
+                <span>Diagnostics Distinction: API Ping vs. Live Crawler Execution</span>
+              </div>
+              <p className="text-muted leading-relaxed">
+                <strong>API Ping (Fast):</strong> Checks whether the TinyFish Agent API endpoint is reachable and the server-side API key is valid.<br />
+                <strong>Live Crawler Test (Real):</strong> Spawns an automated TinyFish browser worker, loads the target URL, extracts public policy guidelines, and returns structured citable evidence with timestamps and publisher information.
+              </p>
+            </div>
+
+            {/* Controlled Live Test */}
+            <div className="rounded-lg border border-line bg-card p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="font-semibold text-heading text-xs uppercase tracking-wide block">Run Controlled Live Test</span>
+                  <span className="text-xs text-muted">Test live extraction against any stable public URL</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={diagLoading}
+                  disabled={diagLoading}
+                  onClick={async () => {
+                    setDiagLoading(true)
+                    try {
+                      const res = await runTinyFishDiagnostics(diagUrl.trim() || 'https://example.com')
+                      setDiagResult(res)
+                      void refreshTinyFishStatus()
+                    } catch (err) {
+                      setDiagResult({
+                        ok: false,
+                        status: 'failed',
+                        targetUrl: diagUrl,
+                        startedAt: new Date().toISOString(),
+                        completedAt: new Date().toISOString(),
+                        durationSeconds: 0,
+                        sourceCount: 0,
+                        evidence: [],
+                        message: err instanceof Error ? err.message : 'Diagnostics run failed',
+                      })
+                    } finally {
+                      setDiagLoading(false)
+                    }
+                  }}
+                >
+                  <Icon name="play" size={14} />
+                  {diagLoading ? 'Crawling Page…' : 'Execute Live Test Retrieval'}
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted shrink-0">Test URL:</span>
+                <input
+                  type="url"
+                  value={diagUrl}
+                  onChange={(e) => setDiagUrl(e.target.value)}
+                  className={`${inputCls} font-mono text-xs`}
+                  placeholder="https://example.com"
+                />
+              </div>
+
+              {diagResult && (
+                <div className={`rounded-lg border p-4 space-y-2 text-xs ${
+                  diagResult.ok
+                    ? 'border-emerald-300 bg-emerald-50/70 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-200'
+                    : 'border-rose-300 bg-rose-50 text-rose-950 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200'
+                }`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2 font-mono font-semibold">
+                    <span>STATUS: {diagResult.status.toUpperCase()}</span>
+                    <span>DURATION: {diagResult.durationSeconds}s</span>
+                    <span>SOURCES: {diagResult.sourceCount}</span>
+                  </div>
+                  <p className="font-mono text-[11px] break-all">URL: {diagResult.targetUrl}</p>
+                  <p className="font-medium text-fg">{diagResult.message}</p>
+                  {diagResult.summary && (
+                    <div className="rounded border border-line bg-card p-3 text-fg text-xs leading-relaxed">
+                      <span className="font-semibold block mb-1 text-primary">Extracted Policy Summary:</span>
+                      {diagResult.summary}
+                    </div>
+                  )}
+                  {diagResult.evidence && diagResult.evidence.length > 0 && (
+                    <div className="pt-2 border-t border-line/60">
+                      <span className="font-semibold block mb-1">Returned Evidence Item:</span>
+                      <p className="font-semibold text-fg">{diagResult.evidence[0].title}</p>
+                      <p className="font-mono text-[11px] text-muted">{diagResult.evidence[0].publisher} · {diagResult.evidence[0].url}</p>
+                      {diagResult.evidence[0].retrievedAt && (
+                        <p className="text-[10px] text-muted mt-0.5">Retrieved at: {new Date(diagResult.evidence[0].retrievedAt).toLocaleString('en-US')}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
 
         <Card>
           <CardHeader title="Profile and preferences" desc="Stored on this device only. Sign-in is not connected." />

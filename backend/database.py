@@ -19,6 +19,12 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
+try:
     from dotenv import load_dotenv
 
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -245,15 +251,32 @@ def get_investigation(inv_id: str) -> Optional[dict]:
     client = get_supabase_client()
     if client:
         try:
-            res = (
-                client.table("investigations").select("*").eq("id", inv_id).execute()
-            )
+            is_uuid = False
+            try:
+                uuid.UUID(str(inv_id))
+                is_uuid = True
+            except ValueError:
+                is_uuid = False
+
+            if is_uuid:
+                res = client.table("investigations").select("*").eq("id", inv_id).execute()
+            else:
+                res = client.table("investigations").select("*").eq("ref", inv_id).execute()
+
             rows = res.data or []
-            return _from_snake(rows[0]) if rows else None
+            if rows:
+                inv = _from_snake(rows[0])
+                _mem_investigations[inv["id"]] = inv
+                return inv
         except Exception as exc:
             log.warning("get_investigation(%s) error: %s", inv_id, exc)
-            return None
-    return _mem_investigations.get(inv_id)
+
+    if inv_id in _mem_investigations:
+        return _mem_investigations[inv_id]
+    for inv in _mem_investigations.values():
+        if inv.get("ref") == inv_id or inv.get("ref", "").lower() == str(inv_id).lower():
+            return inv
+    return None
 
 
 def create_investigation(data: dict) -> dict:
@@ -295,12 +318,15 @@ def create_investigation(data: dict) -> dict:
         "retrieval": {"status": "retrieving", "startedAt": _now()} if data.get("runNow") else None,
     }
 
+    _mem_investigations[inv["id"]] = inv
+
     if client:
         row = _to_snake(inv)
         valid_row = {k: v for k, v in row.items() if k in INVESTIGATION_DB_COLUMNS}
-        client.table("investigations").insert(valid_row).execute()
-    else:
-        _mem_investigations[inv["id"]] = inv
+        try:
+            client.table("investigations").insert(valid_row).execute()
+        except Exception as exc:
+            log.warning("Supabase insert error: %s", exc)
 
     return inv
 
@@ -322,11 +348,17 @@ def update_investigation(inv_id: str, patch: dict) -> Optional[dict]:
     if existing is None:
         return None
 
+    real_id = existing["id"]
+
     updated = {**existing, **{k: v for k, v in patch.items() if v is not None}}
     # allow explicit False / empty list
     for k, v in patch.items():
         if v is False or v == [] or v == "":
             updated[k] = v
+
+    _mem_investigations[real_id] = updated
+    if inv_id != real_id:
+        _mem_investigations[inv_id] = updated
 
     client = get_supabase_client()
     if client:
@@ -335,29 +367,32 @@ def update_investigation(inv_id: str, patch: dict) -> Optional[dict]:
             k: v for k, v in snake_patch.items() if k in INVESTIGATION_DB_COLUMNS and k != "id"
         }
         if valid_patch:
-            client.table("investigations").update(valid_patch).eq("id", inv_id).execute()
-    else:
-        _mem_investigations[inv_id] = updated
+            try:
+                client.table("investigations").update(valid_patch).eq("id", real_id).execute()
+            except Exception as exc:
+                log.warning("Supabase update error: %s", exc)
 
     return updated
 
 
 def delete_investigation(inv_id: str) -> bool:
+    existing = get_investigation(inv_id)
+    if existing is None:
+        return False
+    real_id = existing["id"]
+    _mem_investigations.pop(real_id, None)
+    if inv_id != real_id:
+        _mem_investigations.pop(inv_id, None)
+
     client = get_supabase_client()
     if client:
-        existing = get_investigation(inv_id)
-        if existing is None:
-            return False
         try:
-            client.table("investigations").delete().eq("id", inv_id).execute()
+            client.table("investigations").delete().eq("id", real_id).execute()
             return True
         except Exception as exc:
             log.warning("delete_investigation(%s) error: %s", inv_id, exc)
             return False
-    if inv_id in _mem_investigations:
-        del _mem_investigations[inv_id]
-        return True
-    return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -369,10 +404,11 @@ def add_evidence(inv_id: str, ev: dict) -> Optional[dict]:
     inv = get_investigation(inv_id)
     if inv is None:
         return None
+    real_id = inv["id"]
     ev = {**ev, "id": str(uuid.uuid4()), "retrievedAt": _now()}
     evidence = list(inv.get("evidence", []))
     evidence.append(ev)
-    update_investigation(inv_id, {"evidence": evidence})
+    update_investigation(real_id, {"evidence": evidence})
     return ev
 
 
@@ -385,11 +421,12 @@ def save_report(inv_id: str) -> Optional[dict]:
     inv = get_investigation(inv_id)
     if inv is None:
         return None
+    real_id = inv["id"]
 
     snapshot = {k: v for k, v in inv.items()}
     report: dict = {
         "id": str(uuid.uuid4()),
-        "investigationId": inv_id,
+        "investigationId": real_id,
         "generatedAt": _now(),
         "reviewStatus": inv.get("status", "pending"),
         "outcome": inv.get("outcome") or "Not determined",
@@ -401,7 +438,7 @@ def save_report(inv_id: str) -> Optional[dict]:
         client.table("saved_reports").insert(
             {
                 "id": report["id"],
-                "investigation_id": inv_id,
+                "investigation_id": real_id,
                 "generated_at": report["generatedAt"],
                 "review_status": report["reviewStatus"],
                 "outcome": report["outcome"],
@@ -415,13 +452,19 @@ def save_report(inv_id: str) -> Optional[dict]:
 
 
 def list_reports(inv_id: Optional[str] = None) -> list[dict]:
+    real_id = inv_id
+    if inv_id:
+        inv = get_investigation(inv_id)
+        if inv:
+            real_id = inv["id"]
+
     client = get_supabase_client()
     if client:
         query = client.table("saved_reports").select("*").order(
             "generated_at", desc=True
         )
-        if inv_id:
-            query = query.eq("investigation_id", inv_id)
+        if real_id:
+            query = query.eq("investigation_id", real_id)
         res = query.execute()
         rows = res.data or []
         return [

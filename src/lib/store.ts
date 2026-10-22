@@ -72,7 +72,7 @@ export interface Investigation {
   serviceDateFrom?: string
   serviceDateTo?: string
   billingDate?: string
-  billedAmount?: number
+  billedAmount?: number | null
   billingCodes?: BillingCode[]
   clinicalTimeline?: TimelineEvent[]
   reviewerNotes?: string
@@ -467,6 +467,66 @@ export const getSettings = setStore.get
 export const getInvestigations = invStore.get
 export const getBackendStatus = backendStore.get
 
+export interface TinyFishStoreState {
+  status: 'connected' | 'checking' | 'unavailable' | 'not_configured'
+  loading: boolean
+  reachable: boolean
+  hasKey: boolean
+  endpoint: string | null
+  pingMessage: string
+  lastRun?: {
+    status?: string | null
+    durationSeconds?: number | null
+    sourceCount?: number
+    completedAt?: string | null
+    message?: string | null
+    url?: string | null
+  }
+  checkedAt?: string
+}
+
+const tinyfishStore = createStore<TinyFishStoreState>('medarina.tinyfish.v1', () => ({
+  status: 'checking',
+  loading: true,
+  reachable: false,
+  hasKey: false,
+  endpoint: null,
+  pingMessage: '',
+}))
+
+export const useTinyFishStatus = () => useSyncExternalStore(tinyfishStore.subscribe, tinyfishStore.get)
+export const getTinyFishStore = tinyfishStore.get
+
+export async function refreshTinyFishStatus(): Promise<TinyFishStoreState> {
+  tinyfishStore.set({ ...tinyfishStore.get(), loading: true })
+  try {
+    const s = await api.getTinyFishStatus()
+    const state: TinyFishStoreState = {
+      status: s.status,
+      loading: false,
+      reachable: s.reachable,
+      hasKey: s.hasKey,
+      endpoint: s.endpoint ?? null,
+      pingMessage: s.pingMessage,
+      lastRun: s.lastRun,
+      checkedAt: s.checkedAt,
+    }
+    tinyfishStore.set(state)
+    return state
+  } catch (err) {
+    const state: TinyFishStoreState = {
+      ...tinyfishStore.get(),
+      status: 'unavailable',
+      loading: false,
+      reachable: false,
+      pingMessage: err instanceof Error ? err.message : 'Could not reach backend',
+    }
+    tinyfishStore.set(state)
+    return state
+  }
+}
+
+
 /** Fetches real investigations from the FastAPI backend and merges with static samples. */
 export async function syncWithBackend(): Promise<boolean> {
   backendStore.set({ ...backendStore.get(), loading: true })
@@ -509,6 +569,7 @@ export const refreshInvestigations = syncWithBackend
 // Trigger initial backend synchronization when running in browser
 if (typeof window !== 'undefined') {
   void syncWithBackend()
+  void refreshTinyFishStatus()
 }
 
 export function updateSettings(patch: Partial<Settings>) {
@@ -781,28 +842,32 @@ export function startInvestigationPolling(
   }
 
   const intervalMs = opts?.intervalMs ?? 3000
-  const maxDurationMs = opts?.maxDurationMs ?? 85000 // 85s (matches TinyFish 75s backend timeout)
+  const maxDurationMs = opts?.maxDurationMs ?? 200000 // 200s (allows TinyFish live-web crawler to complete)
   const startTime = Date.now()
 
   const timerId = window.setInterval(async () => {
     try {
+      const fresh = await refreshInvestigation(id)
+
+      // Terminal states: status is no longer 'retrieving'
+      if (fresh && fresh.status !== 'retrieving') {
+        stopInvestigationPolling(id)
+        opts?.onComplete?.(fresh)
+        return
+      }
+
       const elapsed = Date.now() - startTime
       if (elapsed >= maxDurationMs) {
+        // If backend is still actively retrieving, continue polling instead of falsely marking failed
+        if (fresh && fresh.status === 'retrieving') {
+          return
+        }
         stopInvestigationPolling(id)
         opts?.onError?.(new Error('Retrieval timed out waiting for response.'))
         return
       }
-
-      const fresh = await refreshInvestigation(id)
-      if (!fresh) return
-
-      // Terminal states: status is no longer 'retrieving'
-      if (fresh.status !== 'retrieving') {
-        stopInvestigationPolling(id)
-        opts?.onComplete?.(fresh)
-      }
     } catch {
-      // Ignore transient network errors, keep polling until timeout
+      // Ignore transient network errors, keep polling until terminal state or max duration
     }
   }, intervalMs)
 
@@ -924,13 +989,25 @@ export function dashboardStats(list: Investigation[]) {
     open: open.length,
     flagged: list.filter((i) => i.status === 'review' || i.status === 'failed').length,
     closed: list.filter((i) => i.status === 'completed').length,
-    billedUnderReview: open.reduce((s, i) => s + (i.billedAmount ?? 0), 0),
-    avgDaysOpen: open.length ? open.reduce((s, i) => s + (now - new Date(i.createdAt).getTime()) / DAY, 0) / open.length : 0,
+    billedUnderReview: open.reduce((s, i) => {
+      const n = i.billedAmount != null ? Number(i.billedAmount) : NaN
+      return s + (Number.isFinite(n) ? n : 0)
+    }, 0),
+    avgDaysOpen: open.length
+      ? open.reduce((s, i) => {
+          const t = i.createdAt ? new Date(i.createdAt).getTime() : NaN
+          return s + (Number.isFinite(t) ? Math.max(0, (now - t) / DAY) : 0)
+        }, 0) / open.length
+      : 0,
   }
 }
 
-export const fmtMoney = (n?: number) =>
-  n === undefined ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+export const fmtMoney = (n?: number | string | null) => {
+  if (n === null || n === undefined || n === '') return '—'
+  const val = typeof n === 'number' ? n : Number(n)
+  if (!Number.isFinite(val)) return '—'
+  return val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
+}
 
 export function resolveTheme(pref: ThemePref): 'light' | 'dark' {
   if (pref === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -941,5 +1018,8 @@ export function applyTheme(pref: ThemePref) {
   document.documentElement.classList.toggle('dark', resolveTheme(pref) === 'dark')
 }
 
-export const fmtDate = (iso?: string) =>
-  iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+export const fmtDate = (iso?: string | null) => {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}

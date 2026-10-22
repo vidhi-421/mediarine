@@ -34,7 +34,7 @@ const sample = (): Form => ({
   category: 'Billing and Coding',
   ref: '',
   provider: 'Westbrook Family Medicine',
-  sourceUrl: 'https://www.cms.gov',
+  sourceUrl: 'https://www.cms.gov/medicare/payment/fee-schedules/physician',
   details: 'Visit lasted approximately 20 minutes per the encounter summary. Modifier 25 was appended to the evaluation code.',
   serviceDateFrom: '2026-02-10',
   serviceDateTo: '2026-02-10',
@@ -51,6 +51,30 @@ const sample = (): Form => ({
     { date: '2026-02-12', event: 'Claim submitted with modifier 25' },
   ],
   reviewerNotes: 'Check whether the evaluation was significant and separately identifiable from the procedure.',
+  runNow: true,
+})
+
+const cmsSample = (): Form => ({
+  claim: 'Provider billed 99214 outpatient visit alongside G0438 annual wellness examination without documentation of distinct chronic condition management.',
+  category: 'Billing and Coding',
+  ref: '',
+  provider: 'MetroHealth Clinical Associates',
+  sourceUrl: 'https://www.cms.gov/medicare/payment/fee-schedules/physician',
+  details: 'Encounter summary describes routine annual wellness checkup. Modifier 25 was appended to code 99214.',
+  serviceDateFrom: '2026-03-01',
+  serviceDateTo: '2026-03-01',
+  billingDate: '2026-03-04',
+  billedAmount: '385.00',
+  codes: [
+    { code: '99214', type: 'CPT', description: 'Office or other outpatient visit, established patient, moderate complexity' },
+    { code: 'G0438', type: 'HCPCS', description: 'Annual wellness visit; includes a personalized prevention plan of service (initial visit)' },
+    { code: 'I10', type: 'ICD-10', description: 'Essential (primary) hypertension' },
+  ],
+  timeline: [
+    { date: '2026-03-01', event: 'Annual wellness visit completed' },
+    { date: '2026-03-04', event: 'Claim submitted with both 99214 and G0438' },
+  ],
+  reviewerNotes: 'Verify whether CMS policy allows simultaneous billing of 99214 and G0438 on the same date of service.',
   runNow: true,
 })
 
@@ -152,11 +176,36 @@ export default function NewInvestigation() {
     <>
       <PageHeader
         title="New Investigation"
-        desc="Record the claim, billing details, and clinical context. Evidence retrieval can start after submission."
+        desc="Record the claim, billing details, and clinical context. Live evidence retrieval and Gemini AI analysis can start automatically upon submission."
         action={
           <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={() => { setF(sample()); setErrors({}); toast('info', 'Sample claim loaded.') }}><Icon name="file" size={16} />Load Sample Claim</Button>
-            <Button type="button" variant="ghost" onClick={() => setConfirmClear(true)}><Icon name="x" size={16} />Clear Form</Button>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => {
+                setF(cmsSample())
+                setErrors({})
+                toast('info', 'Realistic CMS Fee Schedule claim loaded.')
+              }}
+            >
+              <Icon name="sparkles" size={15} />
+              Load CMS Fee Schedule Claim
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setF(sample())
+                setErrors({})
+                toast('info', 'Standard sample claim loaded.')
+              }}
+            >
+              <Icon name="file" size={15} />
+              Load Sample Claim
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setConfirmClear(true)}>
+              <Icon name="x" size={15} />
+              Clear Form
+            </Button>
           </div>
         }
       />
@@ -197,7 +246,10 @@ export default function NewInvestigation() {
                     </div>
                   </Field>
                   <div>
-                    <p className="mb-1.5 text-[13px] font-medium">Billing codes</p>
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[13px] font-medium text-heading">Billing codes</p>
+                      <span className="text-xs text-muted">CPT (Procedure) · ICD-10 (Diagnosis) · HCPCS (Service/Supply)</span>
+                    </div>
                     <div className="space-y-2">
                       {f.codes.map((c, i) => (
                         <div key={i} className="grid grid-cols-[6.5rem_1fr_auto] gap-2 sm:grid-cols-[6.5rem_8rem_1fr_auto]">
@@ -235,15 +287,31 @@ export default function NewInvestigation() {
                     <textarea id="details" rows={3} value={f.details} onChange={set('details')} className={inputCls} />
                   </Field>
                   <Field label="Reviewer notes (optional)" htmlFor="rnotes"><textarea id="rnotes" rows={3} value={f.reviewerNotes} onChange={set('reviewerNotes')} className={inputCls} /></Field>
-                  <label className="flex items-start gap-3 text-sm">
-                    <input type="checkbox" checked={f.runNow} onChange={(e) => setF({ ...f, runNow: e.target.checked })} className="mt-0.5 h-4 w-4 accent-[var(--primary)]" />
-                    <span><span className="font-medium">Start evidence retrieval after submission</span><span className="block text-xs text-muted">{retrievalEndpoint ? 'Sends the claim to the configured TinyFish endpoint.' : 'TinyFish is not configured, so retrieval will be recorded as Not configured.'}</span></span>
-                  </label>
+
+                  {/* Enhanced Live Retrieval Toggle Card */}
+                  <div className="rounded-lg border border-line bg-sage/50 p-4 transition-colors">
+                    <label className="flex items-start gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={f.runNow}
+                        onChange={(e) => setF({ ...f, runNow: e.target.checked })}
+                        className="mt-1 h-4 w-4 rounded accent-primary cursor-pointer"
+                      />
+                      <div className="space-y-1">
+                        <span className="font-semibold text-fg">Automatically start live TinyFish evidence retrieval</span>
+                        <p className="text-xs text-muted leading-relaxed">
+                          {retrievalEndpoint
+                            ? 'Upon submission, TinyFish will automatically crawl the target source URL, extract clinical policy provisions, and invoke Gemini AI clinical synthesis.'
+                            : 'TinyFish endpoint is not configured in Settings. The claim will be created in pending review status.'}
+                        </p>
+                      </div>
+                    </label>
+                  </div>
                 </Section>
                 <Section title="Review summary" desc="Confirm before submitting.">
                   <dl className="grid gap-3 text-sm sm:grid-cols-2">
                     {[['Claim', f.claim], ['Category', f.category], ['Provider', f.provider || '—'], ['Service dates', `${f.serviceDateFrom} to ${f.serviceDateTo}`], ['Billed amount', fmtMoney(Number(f.billedAmount))], ['Codes', codesValid.map((c) => c.code).join(', ') || '—']].map(([k, v]) => (
-                      <div key={k} className={k === 'Claim' ? 'sm:col-span-2' : ''}><dt className="text-xs text-muted">{k}</dt><dd className="tabular">{v}</dd></div>
+                      <div key={k} className={k === 'Claim' ? 'sm:col-span-2' : ''}><dt className="text-xs text-muted">{k}</dt><dd className="tabular font-medium text-fg">{v}</dd></div>
                     ))}
                   </dl>
                 </Section>
@@ -262,14 +330,31 @@ export default function NewInvestigation() {
         </form>
 
         <div className="space-y-4">
-          <Notice tone={retrievalEndpoint ? 'info' : 'warn'} title={retrievalEndpoint ? 'TinyFish endpoint configured' : 'TinyFish not configured'}>
-            {retrievalEndpoint ? 'The claim and billing details will be sent to the endpoint saved in Settings.' : 'The investigation will be recorded, but live evidence retrieval cannot run. You can add evidence manually.'}
+          <Notice tone={retrievalEndpoint ? 'info' : 'warn'} title={retrievalEndpoint ? 'TinyFish Endpoint Configured' : 'TinyFish Not Configured'}>
+            {retrievalEndpoint ? 'The claim, billing details, and source URL will be dispatched to the backend crawler.' : 'The investigation will be recorded, but live evidence retrieval cannot run. You can add evidence manually.'}
           </Notice>
+
+          <Card>
+            <CardHeader title="7-Stage Investigation Workflow" />
+            <div className="space-y-2 p-5 text-xs text-muted leading-relaxed">
+              <p>Each investigation advances through 7 verifiable stages:</p>
+              <ol className="list-decimal space-y-1.5 pl-4 pt-1 font-medium text-fg">
+                <li>Claim Intake & Validation</li>
+                <li>Billing & Clinical Context</li>
+                <li>TinyFish Live Retrieval</li>
+                <li>Evidence Collection & Classification</li>
+                <li>Clinical AI & Policy Analysis</li>
+                <li>Risk Assessment & Recommendations</li>
+                <li>Investigation Report & Supabase Archive</li>
+              </ol>
+            </div>
+          </Card>
+
           <Card>
             <CardHeader title="How findings are classified" />
             <ul className="space-y-3 p-5 text-sm">
               {[['Verified fact', 'Confirmed by a retrieved, citable source.'], ['Unverified claim', 'Stated by a source but not independently confirmed.'], ['Conflicting evidence', 'Sources disagree on a material point.'], ['Inconclusive', 'Available information is insufficient.']].map(([t, d]) => (
-                <li key={t}><p className="font-medium">{t}</p><p className="text-muted">{d}</p></li>
+                <li key={t}><p className="font-medium text-fg">{t}</p><p className="text-muted text-xs">{d}</p></li>
               ))}
             </ul>
           </Card>

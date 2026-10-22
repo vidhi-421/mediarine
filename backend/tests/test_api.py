@@ -272,3 +272,44 @@ def test_database_update_extra_fields():
     assert r.status_code == 200
     data = r.json()
     assert data["outcome"] == "No Further Action"
+
+
+def test_tinyfish_status():
+    r = client.get("/api/tinyfish/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert "configured" in data
+    assert "status" in data
+    assert "lastRun" in data
+    assert data["status"] in ("connected", "unavailable", "not_configured")
+
+
+def test_get_and_update_investigation_by_ref():
+    inv_id = _create_investigation()
+    inv_data = client.get(f"/api/investigations/{inv_id}").json()
+    ref = inv_data["ref"]
+    assert ref.startswith("INV-")
+
+    # Get by ref
+    r_by_ref = client.get(f"/api/investigations/{ref}")
+    assert r_by_ref.status_code == 200
+    assert r_by_ref.json()["id"] == inv_id
+
+    # Update by ref
+    patch_res = client.patch(f"/api/investigations/{ref}", json={"notes": "Updated via ref"})
+    assert patch_res.status_code == 200
+    assert patch_res.json()["notes"] == "Updated via ref"
+
+    # Verify updated via original id
+    verified = client.get(f"/api/investigations/{inv_id}").json()
+    assert verified["notes"] == "Updated via ref"
+
+
+def test_tinyfish_timeout_and_normalization():
+    import tinyfish_service as tf
+    assert tf.TIMEOUT == 180
+    assert tf.normalize_endpoint("https://agent.tinyfish.ai") == "https://agent.tinyfish.ai/v1/automation/run"
+    assert tf.normalize_endpoint("https://agent.tinyfish.ai/v1") == "https://agent.tinyfish.ai/v1/automation/run"
+    assert tf.normalize_endpoint("https://agent.tinyfish.ai/v1/automation/run") == "https://agent.tinyfish.ai/v1/automation/run"
+
+

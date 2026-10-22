@@ -213,11 +213,49 @@ export const getReport = (reportId: string) =>
   request<SavedReport>('GET', `/api/reports/${reportId}`)
 
 // ---------------------------------------------------------------------------
-// TinyFish proxy test
+// TinyFish proxy test & diagnostics
 // ---------------------------------------------------------------------------
+
+export interface TinyFishStatusData {
+  configured: boolean
+  hasKey: boolean
+  endpoint?: string | null
+  status: 'connected' | 'unavailable' | 'not_configured'
+  reachable: boolean
+  pingMessage: string
+  lastRun?: {
+    status?: string | null
+    durationSeconds?: number | null
+    sourceCount?: number
+    completedAt?: string | null
+    message?: string | null
+    url?: string | null
+  }
+  checkedAt: string
+}
+
+export interface TinyFishDiagnosticResult {
+  ok: boolean
+  status: string
+  targetUrl: string
+  startedAt: string
+  completedAt: string
+  durationSeconds: number
+  sourceCount: number
+  evidence: Evidence[]
+  summary?: string
+  message: string
+}
 
 export const testTinyfishConnection = (endpoint: string, apiKey = '') =>
   request<{ ok: boolean; message: string }>('POST', '/api/tinyfish/test', {
     endpoint,
     apiKey,
   })
+
+export const getTinyFishStatus = () =>
+  request<TinyFishStatusData>('GET', '/api/tinyfish/status')
+
+export const runTinyFishDiagnostics = (url?: string) =>
+  request<TinyFishDiagnosticResult>('POST', '/api/tinyfish/diagnostics/run', { url })
+

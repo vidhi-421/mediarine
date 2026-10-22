@@ -30,6 +30,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
+
+try:
     from dotenv import load_dotenv
 
     _backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +45,7 @@ except ImportError:
     pass
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -225,6 +232,15 @@ def add_evidence(inv_id: str, body: AddEvidenceRequest):
 
 _active_retrieval_tasks: set[str] = set()
 
+_last_tinyfish_run: dict = {
+    "status": None,
+    "durationSeconds": None,
+    "sourceCount": 0,
+    "completedAt": None,
+    "message": None,
+    "url": None,
+}
+
 
 @app.post("/api/investigations/{inv_id}/retrieve", tags=["Retrieval"])
 async def trigger_retrieval(
@@ -237,37 +253,42 @@ async def trigger_retrieval(
         raise HTTPException(404, detail="Investigation not found.")
     if inv.get("sample"):
         raise HTTPException(400, detail="Retrieval is disabled for sample investigations.")
+    real_id = inv["id"]
     # Prevent concurrent duplicate background tasks for the same investigation
-    if inv_id in _active_retrieval_tasks:
-        return {"message": "Retrieval already in progress.", "investigationId": inv_id}
+    if real_id in _active_retrieval_tasks or inv_id in _active_retrieval_tasks:
+        return {"message": "Retrieval already in progress.", "investigationId": real_id}
 
     endpoint = (body.tinyfishEndpoint if body else None) or None
     api_key = (body.tinyfishApiKey if body else None) or None
 
     started_at = datetime.now(timezone.utc).isoformat()
     db.update_investigation(
-        inv_id,
+        real_id,
         {
             "status": "retrieving",
             "retrievalError": None,
             "retrieval": {"status": "retrieving", "startedAt": started_at},
         },
     )
+    _active_retrieval_tasks.add(real_id)
     _active_retrieval_tasks.add(inv_id)
-    background_tasks.add_task(_run_retrieval_task, inv_id, endpoint, api_key)
-    return {"message": "Retrieval started.", "investigationId": inv_id}
+    background_tasks.add_task(_run_retrieval_task, real_id, endpoint, api_key)
+    return {"message": "Retrieval started.", "investigationId": real_id}
 
 
 async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_key: Optional[str] = None):
-    _active_retrieval_tasks.add(inv_id)
+    real_id = inv_id
     try:
         inv = db.get_investigation(inv_id)
         if inv is None:
             return
+        real_id = inv["id"]
+        _active_retrieval_tasks.add(real_id)
+        _active_retrieval_tasks.add(inv_id)
 
         started_at = datetime.now(timezone.utc).isoformat()
         db.update_investigation(
-            inv_id,
+            real_id,
             {
                 "status": "retrieving",
                 "retrievalError": None,
@@ -277,6 +298,14 @@ async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_k
 
         result = await tf_svc.retrieve_evidence(inv, endpoint=endpoint, api_key=api_key)
         completed_at = datetime.now(timezone.utc).isoformat()
+
+        _last_tinyfish_run.update({
+            "status": result["status"],
+            "sourceCount": len(result.get("evidence", [])) if result["status"] == "completed" else 0,
+            "completedAt": completed_at,
+            "message": result.get("message", ""),
+            "url": inv.get("sourceUrl"),
+        })
 
         if result["status"] == "completed":
             user_evidence = [
@@ -312,14 +341,15 @@ async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_k
                         patch["riskIndicators"] = list(set(patch["riskIndicators"] + analysis["riskIndicators"]))
                     if analysis.get("recommendation") and not patch.get("recommendation"):
                         patch["recommendation"] = analysis["recommendation"]
+                    patch["retrieval"]["analysisSource"] = analysis.get("analysisSource", "rule-based-fallback")
                 except Exception as gerr:
-                    log.warning("Gemini analysis error during retrieval for %s: %s", inv_id, gerr)
+                    log.warning("Gemini analysis error during retrieval for %s: %s", real_id, gerr)
 
-            db.update_investigation(inv_id, patch)
-            log.info("Retrieval completed for %s: %s source(s)", inv_id, len(new_evidence))
+            db.update_investigation(real_id, patch)
+            log.info("Retrieval completed for %s: %s source(s)", real_id, len(new_evidence))
         else:
             db.update_investigation(
-                inv_id,
+                real_id,
                 {
                     "status": "failed" if result["status"] == "failed" else "pending",
                     "retrievalError": result.get("message"),
@@ -331,12 +361,12 @@ async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_k
                     },
                 },
             )
-            log.warning("Retrieval %s for %s: %s", result["status"], inv_id, result.get("message"))
+            log.warning("Retrieval %s for %s: %s", result["status"], real_id, result.get("message"))
     except Exception as exc:
         log.error("Unhandled exception in _run_retrieval_task for %s: %s", inv_id, exc, exc_info=True)
         completed_at = datetime.now(timezone.utc).isoformat()
         db.update_investigation(
-            inv_id,
+            real_id,
             {
                 "status": "failed",
                 "retrievalError": f"Retrieval failed unexpectedly: {exc}",
@@ -350,6 +380,7 @@ async def _run_retrieval_task(inv_id: str, endpoint: Optional[str] = None, api_k
         )
     finally:
         _active_retrieval_tasks.discard(inv_id)
+        _active_retrieval_tasks.discard(real_id)
 
 
 # ---------------------------------------------------------------------------
@@ -373,15 +404,17 @@ def analyse(inv_id: str):
         patch["riskIndicators"] = analysis["riskIndicators"]
     if analysis.get("recommendation"):
         patch["recommendation"] = analysis["recommendation"]
-    if patch:
-        db.update_investigation(inv_id, patch)
+    analysis_src = analysis.get("analysisSource", "rule-based-fallback")
+    curr_ret = inv.get("retrieval") or {}
+    patch["retrieval"] = {**curr_ret, "analysisSource": analysis_src}
+    db.update_investigation(inv_id, patch)
 
     return {
         "verificationQuestions": questions,
         "summary": analysis.get("summary"),
         "riskIndicators": analysis.get("riskIndicators") or [],
         "recommendation": analysis.get("recommendation"),
-        "analysisSource": analysis.get("analysisSource", "rule-based-fallback"),
+        "analysisSource": analysis_src,
     }
 
 
@@ -429,6 +462,73 @@ async def test_tinyfish(body: dict):
     api_key = body.get("apiKey", "")
     result = await tf_svc.test_connection(endpoint, api_key)
     return result
+
+
+@app.get("/api/tinyfish/status", tags=["TinyFish"])
+async def tinyfish_status():
+    status = tf_svc.get_service_status()
+    ep = status.get("endpoint") or ""
+    key = os.getenv("TINYFISH_API_KEY", "")
+
+    # Lightweight ping check if configured
+    if status.get("configured"):
+        ping = await tf_svc.test_connection(ep, key)
+    else:
+        ping = {"ok": False, "message": "TinyFish endpoint not configured in backend environment."}
+
+    return {
+        "configured": status.get("configured", False),
+        "hasKey": status.get("hasKey", False),
+        "endpoint": status.get("endpoint"),
+        "status": "connected" if ping.get("ok") else "unavailable" if status.get("configured") else "not_configured",
+        "reachable": ping.get("ok", False),
+        "pingMessage": ping.get("message", ""),
+        "lastRun": _last_tinyfish_run,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/tinyfish/diagnostics/run", tags=["TinyFish"])
+async def run_tinyfish_diagnostics(body: Optional[dict] = None):
+    """
+    Run a controlled live retrieval against a target URL (defaults to https://example.com)
+    to verify real TinyFish crawler and extraction capabilities without exposing API keys.
+    """
+    test_url = (body or {}).get("url") or "https://example.com"
+    t0 = time.time()
+    start_iso = datetime.now(timezone.utc).isoformat()
+
+    test_inv = {
+        "claim": "Public documentation notice and policy guidelines on target domain",
+        "category": "Documentation",
+        "sourceUrl": test_url,
+        "billingCodes": [],
+    }
+    result = await tf_svc.retrieve_evidence(test_inv)
+    duration = round(time.time() - t0, 2)
+    completed_iso = datetime.now(timezone.utc).isoformat()
+
+    _last_tinyfish_run.update({
+        "status": result.get("status"),
+        "durationSeconds": duration,
+        "sourceCount": len(result.get("evidence", [])),
+        "completedAt": completed_iso,
+        "message": result.get("message"),
+        "url": test_url,
+    })
+
+    return {
+        "ok": result.get("status") == "completed",
+        "status": result.get("status"),
+        "targetUrl": test_url,
+        "startedAt": start_iso,
+        "completedAt": completed_iso,
+        "durationSeconds": duration,
+        "sourceCount": len(result.get("evidence", [])),
+        "evidence": result.get("evidence", []),
+        "summary": result.get("summary"),
+        "message": result.get("message"),
+    }
 
 
 @app.post("/api/tinyfish/retrieve", tags=["TinyFish"])

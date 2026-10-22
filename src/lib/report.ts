@@ -1,8 +1,24 @@
 import { fmtDate, fmtMoney, retrievalStatusOf, type Evidence, type Investigation } from './store'
 import { RETRIEVAL_LABEL, type RetrievalStatus } from './tinyfish'
 
-export type StageState = 'done' | 'active' | 'error' | 'waiting'
-export interface Stage { key: string; label: string; note: string; state: StageState; status?: string }
+export type StageState =
+  | 'not_started'
+  | 'queued'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'done'
+  | 'active'
+  | 'error'
+  | 'waiting'
+
+export interface Stage {
+  key: string
+  label: string
+  note: string
+  state: StageState
+  status?: string
+}
 
 const CLASS_LABEL = { verified: 'Verified fact', unverified: 'Unverified claim', conflicting: 'Conflicting evidence', inconclusive: 'Inconclusive' }
 const REVIEW_LABEL = { pending: 'Pending review', review: 'Review required', completed: 'Completed', retrieving: 'Retrieving sources', failed: 'Retrieval failed' }
@@ -16,7 +32,7 @@ export function verificationQuestions(inv: Investigation): string[] {
     else q.push(`Does published guidance support billing ${c.type} ${c.code}${c.description ? ` (${c.description})` : ''} in this context?`)
   }
   if (inv.serviceDateFrom) q.push(`Are the services consistent with the dates of service ${fmtDate(inv.serviceDateFrom)}${inv.serviceDateTo && inv.serviceDateTo !== inv.serviceDateFrom ? ` to ${fmtDate(inv.serviceDateTo)}` : ''}?`)
-  if (inv.billedAmount !== undefined) q.push(`Is the billed amount of ${fmtMoney(inv.billedAmount)} consistent with the services documented?`)
+  if (inv.billedAmount != null) q.push(`Is the billed amount of ${fmtMoney(inv.billedAmount)} consistent with the services documented?`)
   if (!q.length) q.push(`Is the claim statement supported by a citable public source?`)
   return q
 }
@@ -27,17 +43,69 @@ export function workflow(inv: Investigation, hasSavedReport: boolean): Stage[] {
   const rs = retrievalStatusOf(inv)
   const tf = tinyfishEvidence(inv)
   const classified = inv.evidence.filter((e) => e.retrieval !== 'failed')
-  const decided = (inv.outcome && inv.outcome !== 'Not determined') || inv.status === 'completed'
-  const retrievalState: StageState = rs === 'completed' ? 'done' : rs === 'failed' || rs === 'not_configured' ? 'error' : rs === 'retrieving' || rs === 'queued' ? 'active' : 'waiting'
+  const decided = Boolean((inv.outcome && inv.outcome !== 'Not determined') || inv.status === 'completed')
+
+  // Stage 3: Retrieval State
+  let retrievalState: StageState = 'not_started'
+  let retrievalStatus = 'Not Started'
+  let retrievalNote = 'Not started — click Retrieve Evidence to start live search'
+
+  if (rs === 'completed') {
+    retrievalState = 'completed'
+    retrievalStatus = 'Completed'
+    retrievalNote = `${tf.length} live source${tf.length === 1 ? '' : 's'} retrieved`
+  } else if (rs === 'retrieving') {
+    retrievalState = 'in_progress'
+    retrievalStatus = 'In Progress'
+    retrievalNote = inv.retrieval?.message || 'Connecting to TinyFish live-web research agent...'
+  } else if (rs === 'queued') {
+    retrievalState = 'queued'
+    retrievalStatus = 'Queued'
+    retrievalNote = 'Queued in retrieval pipeline'
+  } else if (rs === 'failed' || rs === 'not_configured') {
+    retrievalState = 'failed'
+    retrievalStatus = 'Failed'
+    retrievalNote = inv.retrieval?.message || inv.retrievalError || 'Source retrieval failed. Click Retry to run again.'
+  }
+
+  // Stage 4: Collection State
+  const collectionState: StageState = inv.evidence.length > 0 ? 'completed' : rs === 'retrieving' ? 'in_progress' : 'not_started'
+  const collectionStatus = inv.evidence.length > 0 ? 'Completed' : rs === 'retrieving' ? 'In Progress' : 'Not Started'
+  const collectionNote = inv.evidence.length > 0
+    ? `${inv.evidence.length} source${inv.evidence.length === 1 ? '' : 's'} on record`
+    : rs === 'retrieving' ? 'Collecting live sources...' : 'No sources recorded'
+
+  // Stage 5: Comparison / Evidence Analysis State
+  const comparisonState: StageState = (classified.length > 0 || Boolean(inv.summary)) ? 'completed' : rs === 'retrieving' ? 'in_progress' : 'not_started'
+  const comparisonStatus = (classified.length > 0 || Boolean(inv.summary)) ? 'Completed' : rs === 'retrieving' ? 'In Progress' : 'Not Started'
+  const comparisonNote = classified.length > 0
+    ? `${classified.length} source${classified.length === 1 ? '' : 's'} classified and analyzed`
+    : inv.summary ? 'Clinical summary generated' : rs === 'retrieving' ? 'Analyzing retrieved sources...' : 'No evidence to analyse'
+
+  // Stage 6: Risk Assessment State
+  const riskState: StageState = decided ? 'completed' : classified.length > 0 ? 'in_progress' : 'not_started'
+  const riskStatus = decided ? 'Completed' : classified.length > 0 ? 'In Progress' : 'Not Started'
+  const riskNote = decided
+    ? `Reviewer outcome: ${inv.outcome}`
+    : classified.length > 0 ? 'Awaiting reviewer determination' : 'Awaiting evidence analysis'
+
+  // Stage 7: Investigation Report State
+  const reportState: StageState = hasSavedReport ? 'completed' : decided ? 'in_progress' : 'not_started'
+  const reportStatus = hasSavedReport ? 'Completed' : decided ? 'In Progress' : 'Not Started'
+  const reportNote = hasSavedReport
+    ? 'Report saved to Supabase'
+    : decided ? 'Draft report ready — click Save Report' : 'Not yet saved'
+
+  const questionsCount = verificationQuestions(inv).length
+
   return [
-    { key: 'intake', label: 'Claim Submitted', note: `Recorded ${fmtDate(inv.createdAt)}`, state: 'done' },
-    { key: 'questions', label: 'Verification Questions', note: `${verificationQuestions(inv).length} derived from claim fields`, state: 'done' },
-    { key: 'retrieval', label: 'TinyFish Live-Web Investigation', note: rs ? `${RETRIEVAL_LABEL[rs]}${rs === 'completed' ? ` · ${tf.length} source${tf.length === 1 ? '' : 's'}` : ''}` : 'Not run',
-      state: retrievalState, status: rs === 'completed' ? 'Evidence Retrieved' : rs === 'failed' ? 'Retrieval Failed' : rs === 'not_configured' ? 'Awaiting Configuration' : rs === 'retrieving' || rs === 'queued' ? 'Retrieving' : 'Not Run' },
-    { key: 'collection', label: 'Evidence Collection', note: inv.evidence.length ? `${inv.evidence.length} source${inv.evidence.length === 1 ? '' : 's'} on record` : 'No sources recorded', state: inv.evidence.length ? 'done' : 'waiting' },
-    { key: 'comparison', label: 'Evidence Analysis', note: classified.length ? `${classified.length} item${classified.length === 1 ? '' : 's'} classified` : 'No evidence to analyse', state: classified.length ? 'done' : 'waiting' },
-    { key: 'risk', label: 'Risk Assessment', note: decided ? `Reviewer outcome recorded` : classified.length ? 'Awaiting reviewer assessment' : 'Awaiting evidence', state: decided ? 'done' : classified.length ? 'active' : 'waiting', status: decided ? undefined : classified.length ? 'Pending Review' : undefined },
-    { key: 'report', label: 'Investigation Report', note: hasSavedReport ? 'Report saved to history' : 'Not yet saved', state: hasSavedReport ? 'done' : decided ? 'active' : 'waiting' },
+    { key: 'intake', label: 'Claim Submitted', note: `Recorded ${fmtDate(inv.createdAt)}`, state: 'completed', status: 'Completed' },
+    { key: 'questions', label: 'Verification Questions', note: `${questionsCount} derived from claim fields`, state: 'completed', status: 'Completed' },
+    { key: 'retrieval', label: 'TinyFish Live-Web Investigation', note: retrievalNote, state: retrievalState, status: retrievalStatus },
+    { key: 'collection', label: 'Evidence Collection', note: collectionNote, state: collectionState, status: collectionStatus },
+    { key: 'comparison', label: 'Evidence Analysis', note: comparisonNote, state: comparisonState, status: comparisonStatus },
+    { key: 'risk', label: 'Risk Assessment', note: riskNote, state: riskState, status: riskStatus },
+    { key: 'report', label: 'Investigation Report', note: reportNote, state: reportState, status: reportStatus },
   ]
 }
 

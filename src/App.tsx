@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ConfirmDialog, Icon, Logo, MenuItem, Popover, ToastHost } from './components/ui'
-import { applyTheme, resolveTheme, updateSettings, useInvestigations, useSettings, useBackendStatus, syncWithBackend, type ThemePref } from './lib/store'
+import { applyTheme, resolveTheme, updateSettings, useInvestigations, useSettings, useBackendStatus, useTinyFishStatus, syncWithBackend, type ThemePref } from './lib/store'
 import { navigate, useRoute } from './lib/router'
 import { signOut, useSession } from './lib/auth'
 import { toast } from './lib/toast'
@@ -112,6 +112,7 @@ function Notifications() {
 function Shell({ route }: { route: string }) {
   const settings = useSettings()
   const backend = useBackendStatus()
+  const tfStatus = useTinyFishStatus()
   const session = useSession()!
   const dark = useThemeEffect()
   const collapsed = settings.sidebarCollapsed
@@ -144,16 +145,25 @@ function Shell({ route }: { route: string }) {
     <div className="flex h-full flex-col">
       <a href="#/" className={`flex items-center gap-2.5 py-5 ${compact ? 'justify-center' : 'px-5'}`} aria-label="Medarina home">
         <Logo />
-        {!compact && <span className="text-[17px] font-semibold tracking-tight text-heading">Medarina</span>}
+        {!compact && (
+          <div className="flex flex-col">
+            <span className="text-[17px] font-semibold tracking-tight text-heading">Medarina</span>
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted">Clinical Audit</span>
+          </div>
+        )}
       </a>
       <nav aria-label="Primary" className="flex-1 space-y-1 px-3">
         {NAV.map((n) => {
           const active = isActive(route, n.to)
           return (
             <a key={n.to} href={`#${n.to}`} title={compact ? n.label : undefined} aria-label={compact ? n.label : undefined} aria-current={active ? 'page' : undefined}
-              className={`flex items-center gap-3 rounded-md py-2 text-sm font-medium transition-colors ${compact ? 'justify-center px-0' : 'px-3'} ${active ? 'bg-primary text-primary-fg' : 'text-fg hover:bg-sage'}`}>
-              <Icon name={n.icon} />
-              {!compact && n.label}
+              className={`flex items-center gap-3 rounded-lg py-2.5 text-sm font-medium transition-all ${compact ? 'justify-center px-0' : 'px-3.5'} ${
+                active
+                  ? 'bg-primary text-primary-fg shadow-sm font-semibold'
+                  : 'text-fg hover:bg-sage/70 hover:translate-x-0.5'
+              }`}>
+              <Icon name={n.icon} size={18} />
+              {!compact && <span>{n.label}</span>}
             </a>
           )
         })}
@@ -161,7 +171,7 @@ function Shell({ route }: { route: string }) {
       <div className="space-y-2 p-3">
         {session.guest && !compact && <p className="rounded-md bg-sky-bg px-3 py-2 text-xs text-info">Sample workspace session. <a href="#/signup" className="font-medium underline">Create an account</a></p>}
         <button onClick={() => updateSettings({ sidebarCollapsed: !collapsed })} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} className={`hidden w-full items-center gap-3 rounded-md py-2 text-sm text-muted hover:bg-sage hover:text-fg lg:flex ${compact ? 'justify-center' : 'px-3'}`}>
-          <Icon name="panel" />{!compact && 'Collapse'}
+          <Icon name="panel" />{!compact && (collapsed ? 'Expand' : 'Collapse Sidebar')}
         </button>
       </div>
     </div>
@@ -169,11 +179,11 @@ function Shell({ route }: { route: string }) {
 
   return (
     <div className="min-h-screen bg-page text-fg">
-      <aside className={`fixed inset-y-0 left-0 z-30 hidden print:!hidden border-r border-line bg-sidebar sidebar-scope transition-[width] lg:block ${collapsed ? 'w-[72px]' : 'w-64'}`}>{nav(collapsed)}</aside>
+      <aside className={`fixed inset-y-0 left-0 z-30 hidden print:!hidden border-r border-line bg-sidebar sidebar-scope transition-[width] duration-200 lg:block ${collapsed ? 'w-[72px]' : 'w-64'}`}>{nav(collapsed)}</aside>
 
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-xs" onClick={() => setOpen(false)} />
           <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r border-line bg-sidebar sidebar-scope shadow-pop" aria-label="Navigation menu">
             <button onClick={() => setOpen(false)} aria-label="Close navigation" className="absolute right-3 top-4 rounded-md p-1.5 text-muted hover:bg-sage"><Icon name="x" /></button>
             {nav(false)}
@@ -181,14 +191,71 @@ function Shell({ route }: { route: string }) {
         </div>
       )}
 
-      <div className={`transition-[padding] print:!pl-0 ${collapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}>
-        <header className="sticky top-0 z-20 flex print:hidden h-14 items-center gap-3 border-b border-line bg-card px-4 sm:px-8">
+      <div className={`transition-[padding] duration-200 print:!pl-0 ${collapsed ? 'lg:pl-[72px]' : 'lg:pl-64'}`}>
+        <header className="sticky top-0 z-20 flex print:hidden h-14 items-center gap-3 border-b border-line bg-card/95 backdrop-blur-sm px-4 sm:px-8">
           <button onClick={() => setOpen(true)} aria-label="Open navigation" aria-expanded={open} className="rounded-md p-1.5 hover:bg-sage lg:hidden"><Icon name="menu" /></button>
+          
           <form role="search" className="relative max-w-md flex-1" onSubmit={(e) => { e.preventDefault(); if (q.trim()) navigate(`/investigations?q=${encodeURIComponent(q.trim())}`) }}>
             <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-            <input aria-label="Search investigations" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search investigations" className="h-9 w-full rounded-md border border-line bg-page pl-9 pr-3 text-sm placeholder:text-muted hover:border-emerald focus:border-primary" />
+            <input aria-label="Search investigations" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search investigations, claims, CPT codes..." className="h-9 w-full rounded-lg border border-line bg-page/70 pl-9 pr-12 text-sm placeholder:text-muted hover:border-emerald focus:border-primary focus:bg-card transition-colors" />
+            <kbd className="hidden sm:inline-flex absolute right-2.5 top-1/2 -translate-y-1/2 items-center rounded border border-line bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted">↵</kbd>
           </form>
+
           <div className="ml-auto flex items-center gap-2">
+            {/* Live Backend Connection Indicator */}
+            <div
+              className={`hidden sm:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                backend.connected
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                  : backend.loading
+                    ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300'
+              }`}
+              title={`API: ${backend.endpoint} · Supabase Connected`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  backend.connected
+                    ? 'bg-emerald-500 animate-pulse'
+                    : backend.loading
+                      ? 'bg-amber-400 animate-ping'
+                      : 'bg-rose-500'
+                }`}
+              />
+              <span>
+                {backend.connected
+                  ? 'FastAPI + Supabase Live'
+                  : backend.loading
+                    ? 'Connecting to Backend...'
+                    : 'Backend Offline'}
+              </span>
+            </div>
+
+            {/* Live TinyFish Service Indicator */}
+            <div
+              className={`hidden md:inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                tfStatus.status === 'connected'
+                  ? 'border-purple-200 bg-purple-50 text-purple-800 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300'
+                  : tfStatus.status === 'checking'
+                    ? 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                    : 'border-slate-200 bg-slate-50 text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
+              }`}
+              title={tfStatus.pingMessage || 'TinyFish Live Web Crawler'}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  tfStatus.status === 'connected'
+                    ? 'bg-purple-500 animate-pulse'
+                    : tfStatus.status === 'checking'
+                      ? 'bg-amber-400 animate-ping'
+                      : 'bg-slate-400'
+                }`}
+              />
+              <span>
+                TinyFish: {tfStatus.status === 'connected' ? 'Connected' : tfStatus.status === 'checking' ? 'Checking' : 'Unavailable'}
+              </span>
+            </div>
+
             <Notifications />
             <button onClick={() => updateSettings({ theme: dark ? 'light' : 'dark' })} aria-label={dark ? 'Switch to light theme' : 'Switch to dark theme'} title={dark ? 'Switch to light theme' : 'Switch to dark theme'} className="grid h-9 w-9 place-items-center rounded-md border border-line bg-card hover:bg-sage">
               <Icon name={dark ? 'sun' : 'moon'} />

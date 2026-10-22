@@ -40,6 +40,8 @@ const P: Record<string, ReactNode> = {
   play: <path d="M7 4v16l13-8Z" />,
   activity: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
   user: (<><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></>),
+  clock: (<><circle cx="12" cy="12" r="9" /><polyline points="12 6 12 12 16 14" /></>),
+  sparkles: (<><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" /></>),
 }
 
 export function Icon({ name, size = 18, className = '' }: { name: string; size?: number; className?: string }) {
