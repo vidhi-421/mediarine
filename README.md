@@ -1,191 +1,323 @@
-# Medarina — Healthcare Claims Investigation & Clinical Evidence Platform
+# Medarina — AI-Powered Healthcare Claims Investigation
 
-> **AI-Powered Claim Verification & Compliance Auditing with Live-Web Regulatory Evidence Retrieval via TinyFish**
+**Investigate healthcare claims. Verify live evidence. Support informed audit decisions.**
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
-[![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
-[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com)
-[![TinyFish](https://img.shields.io/badge/TinyFish-Live--Web_Automation-blueviolet)](https://tinyfish.ai)
-[![Gemini](https://img.shields.io/badge/Google_Gemini-Clinical_Synthesis-orange?logo=google&logoColor=white)](https://ai.google.dev)
-[![Tests](https://img.shields.io/badge/Tests-21%20Passed-brightgreen)](backend/tests/test_api.py)
+Medarina is a healthcare claims investigation and clinical compliance auditing platform that helps reviewers examine billing claims, retrieve relevant public healthcare policy information, identify potential inconsistencies, and organize evidence for human review.
 
----
+Instead of relying only on static information, Medarina integrates TinyFish for live web evidence retrieval and uses AI-assisted analysis to help reviewers understand potential billing and documentation risks.
 
-## 1. System Architecture & Data Flow
+> **Important:** Medarina supports healthcare audit workflows. It does not independently establish fraud, replace clinical judgment, or guarantee that a claim is compliant or non-compliant.
 
-Medarina implements a secure, decoupled full-stack architecture where browser clients never touch third-party automation secrets or AI keys. All external communications flow through authenticated FastAPI services and are persisted to Supabase PostgreSQL.
+## The Problem
 
+Healthcare claims may contain billing inconsistencies, insufficient supporting documentation, coding questions, or discrepancies between submitted services and applicable policy requirements.
+
+Reviewers need to gather relevant information from public policy sources, compare it with the submitted claim, and document their findings. Manual research can be time-consuming, while unsupported automated conclusions can create additional risks.
+
+Medarina aims to make this process more structured by connecting claim information, live policy research, evidence collection, and reviewer decisions in one workflow.
+
+## The Solution
+
+Medarina provides a centralized workspace for healthcare claims investigation.
+
+- **Claim intake:** Capture claim statements, billing codes, service dates, billed amounts, and relevant context.
+- **Live web research:** Use TinyFish to retrieve information from relevant public healthcare policy webpages.
+- **Evidence collection:** Organize retrieved sources, including their titles, URLs, and available metadata.
+- **AI-assisted analysis:** Generate summaries and identify potential documentation or billing concerns using the configured analysis service.
+- **Risk assessment:** Help reviewers examine evidence gaps and potential inconsistencies.
+- **Audit reporting:** Present findings and reviewer decisions in a structured report.
+- **Investigation history:** Revisit saved investigations and their associated evidence and reports.
+- **System diagnostics:** Check backend connectivity and test live retrieval.
+
+## Key Features
+
+| Feature | Purpose |
+|---|---|
+| Investigation Dashboard | View investigation counts, statuses, and workflow activity |
+| Claim Intake | Record claim details and clinical context |
+| TinyFish Integration | Retrieve current information from public webpages |
+| Evidence Management | Review retrieved sources and supporting information |
+| AI-Assisted Analysis | Summarize evidence and surface potential risks |
+| Review Workflow | Track investigation progress and reviewer decisions |
+| Reports | Present findings in a structured format |
+| Supabase Persistence | Store investigation and report data through the backend |
+| Integration Diagnostics | Test service connectivity and live retrieval |
+
+Feature availability depends on the configured environment and successful service execution.
+
+## How TinyFish Is Used
+
+TinyFish is a core part of Medarina's evidence-retrieval workflow, not just a decorative integration.
+
+Medarina uses TinyFish's web-agent capabilities to retrieve relevant information from public healthcare policy webpages.
+
+### Retrieval Workflow
+
+1. A reviewer creates or opens an investigation.
+2. Medarina identifies the relevant claim details, billing codes, and research target.
+3. The FastAPI backend sends a focused retrieval request to TinyFish.
+4. TinyFish accesses the target webpage and extracts relevant information.
+5. Medarina receives the returned evidence, including available source metadata.
+6. The evidence is attached to the investigation for review and AI-assisted analysis.
+7. The reviewer examines the findings and determines the appropriate audit outcome.
+
+### Example
+
+For a claim involving CPT 99214 and HCPCS G0438, Medarina can retrieve relevant public healthcare policy information and help identify questions that require further investigation.
+
+A successful retrieval of the general CMS Physician Fee Schedule page does not, by itself, establish whether the particular code combination is permitted. Specific billing rules and supporting documentation must be verified before reaching a conclusion.
+
+### Live Retrieval Diagnostics
+
+The application includes a controlled live retrieval test to check whether TinyFish can access a public URL and return extracted information.
+
+During development testing, the CMS Physician Fee Schedule page returned one source in approximately 49 seconds. Actual claim retrieval has also been tested, and retrieval timeouts have been addressed through focused prompts, a specific CMS target URL, and improved polling.
+
+Results depend on the target webpage, service availability, request complexity, and configured credentials.
+
+## Technical Architecture
+
+```text
+Reviewer
+   |
+   v
+Medarina Frontend
+React + TypeScript + Vite
+   |
+   v
+FastAPI Backend
+   |
+   +---- TinyFish
+   |       |
+   |       v
+   |   Live Web Evidence
+   |
+   +---- AI Analysis Service
+   |       |
+   |       v
+   |   Evidence Summary
+   |   and Risk Indicators
+   |
+   +---- Supabase
+           |
+           v
+    Saved Investigations
+    and Reports
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             REACT 19 FRONTEND                               │
-│  - 7-Stage Investigation Workflow Stepper with Real-Time Progress Bar       │
-│  - Live Elapsed Second Timer & TinyFish Connectivity Indicator Pill         │
-│  - Clickable Source Badges, Publisher Metadata, & Verbatim Quote Cards      │
-│  - In-Browser Diagnostic Runner (Settings & Investigation Views)            │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │ REST / JSON (Polling @ 3s)
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           FASTAPI BACKEND SERVICE                           │
-│  - Native Windows Truststore Integration (Zero SSL Drops)                   │
-│  - Asynchronous Background Task Queue (No Duplicate Crawls)                 │
-│  - In-Process Write-Through Resilient Memory Caching                        │
-│  - Diagnostic Endpoint: POST /api/tinyfish/diagnostics/run                  │
-└──────────────┬───────────────────────┬───────────────────────────────┬──────┘
-               │                       │                               │
-               ▼                       ▼                               ▼
-┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
-│        TINYFISH         │ │      GOOGLE GEMINI      │ │      SUPABASE DB        │
-│   LIVE-WEB RETRIEVAL    │ │   CLINICAL SYNTHESIS    │ │  POSTGRESQL PERSISTENCE │
-│ - Cloud Headless Runner │ │ - Gemini 3.8 Flash      │ │ - Row-Level Security    │
-│ - CMS & Policy Crawler  │ │ - Deterministic Offline │ │ - Investigations Table  │
-│ - Verbatim Quote Proof  │ │   Fallback Engine       │ │ - Saved Reports Table   │
-└─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
+
+### Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React, TypeScript, Vite |
+| Backend | Python, FastAPI |
+| Live Web Retrieval | TinyFish |
+| Database and Persistence | Supabase |
+| AI-Assisted Analysis | Google Gemini, when configured and available |
+| Testing | Pytest, frontend production build |
+| Version Control | Git and GitHub |
+
+## Project Structure
+
+```text
+mediarine/
+├── backend/
+│   ├── main.py
+│   ├── database.py
+│   ├── tinyfish_service.py
+│   ├── gemini_service.py
+│   ├── tests/
+│   └── migrations/
+├── src/
+│   ├── components/
+│   ├── lib/
+│   ├── pages/
+│   ├── App.tsx
+│   └── index.css
+├── README.md
+├── package.json
+└── vite.config.ts
 ```
 
----
+The repository may contain additional configuration, deployment, and supporting files.
 
-## 2. TinyFish Integration: Meaningful, Genuine Web Automation
+## Getting Started
 
-Medarina does **not** rely on static databases, mocked scrapers, or hardcoded dummy evidence. In healthcare compliance, reimbursement rules, Local Coverage Determinations (LCDs), and National Coverage Determinations (NCDs) update constantly across CMS.gov, AMA, and commercial payer portals.
+### Prerequisites
 
-### How TinyFish is Integrated:
-1. **Server-Side Security**: The frontend calls `POST /api/investigations/{id}/retrieve`. The FastAPI server extracts the target clinical guideline URL or billing code query and dispatches an authenticated job to TinyFish's cloud automation runner (`https://agent.tinyfish.ai/v1/automation/run`). The `TINYFISH_API_KEY` remains strictly protected server-side.
-2. **Dedicated 7-Stage Workflow**: The investigation page visualizes real progress:
-   - Stage 1: Intake & Code Parsing
-   - **Stage 2: Policy & Guideline Retrieval (TinyFish Live-Web Retrieval)**
-   - Stage 3: Clinical Timeline & Evidence Synthesis
-   - Stage 4: Medical Necessity & Discrepancy Analysis
-   - Stage 5: Risk Indicator & Compliance Scoring
-   - Stage 6: Formal Investigation Report Compilation
-   - Stage 7: Human Reviewer Determination
-3. **Real Evidence Extraction**: TinyFish's cloud crawler renders the target URL, executes browser interactions, extracts visible text, and returns:
-   - Verifiable source title and canonical URL
-   - Publisher / Domain metadata
-   - Extracted clinical or billing policy excerpt
-   - ISO retrieval timestamp
-   - Real execution duration (typically 12–35s depending on target page complexity)
-4. **Transparent Diagnostics**: In **Settings → TinyFish Integration Diagnostics**, users and judges can run a controlled live crawl against public targets (`https://example.com`, `https://httpbin.org/html`) to verify latency, source counts, and exact extracted content in real time.
+Install the following:
 
----
+- Node.js and npm
+- Python 3.11 or a compatible version supported by the backend dependencies
+- A Supabase project
+- A TinyFish API key
+- A Gemini API key if using Gemini-based analysis
 
-## 3. Quick Start & Local Reproduction
+### 1. Clone the Repository
 
-### Step 1 — Prerequisites
-- Python 3.13 (`python --version`)
-- Node.js 20+ (`node --version`)
-
-### Step 2 — Environment Setup
-```powershell
-# Copy environment template
-Copy-Item backend\.env.example backend\.env
-# Ensure TINYFISH_API_KEY, SUPABASE_URL, and SUPABASE_SERVICE_KEY are present
+```bash
+git clone https://github.com/vidhi-421/mediarine.git
+cd mediarine
 ```
 
-### Step 3 — Install Dependencies
-```powershell
-# Backend dependencies
-py -m pip install -r backend\requirements.txt
+### 2. Install Frontend Dependencies
 
-# Frontend dependencies
+```bash
 npm install
 ```
 
-### Step 4 — Run Backend & Frontend
-```powershell
-# Terminal 1 — Start FastAPI backend (port 8000)
-cd backend
-py -m uvicorn main:app --host 127.0.0.1 --port 8000
+### 3. Configure Environment Variables
 
-# Terminal 2 — Start React/Vite frontend (port 8443)
-npm run dev -- --port 8443
+Create a `.env` file in the project root for the frontend:
+
+```env
+VITE_API_URL=http://localhost:8000
 ```
 
-- **Frontend App**: http://localhost:8443/
-- **Backend API & Swagger Docs**: http://127.0.0.1:8000/docs
-- **TinyFish Live Status**: http://127.0.0.1:8000/api/tinyfish/status
+Configure the backend using `backend/.env`:
 
-### Step 5 — Verify via Automated Test Suite
-```powershell
-# Run all 21 unit and integration tests (100% pass)
-py -m pytest backend/tests -v
+```env
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_KEY=your_supabase_service_key
 
-# Run full end-to-end live crawler and Supabase verification
-py scratch/verify_e2e_full_flow.py
+TINYFISH_ENDPOINT=https://agent.tinyfish.ai/v1/automation/run
+TINYFISH_API_KEY=your_tinyfish_api_key
 
-# Verify frontend production build
-npm run build
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=your_supported_gemini_model
 ```
 
----
+Use the actual variable names required by the backend configuration. Keep all real credentials private. Never commit API keys, service-role keys, or `.env` files to GitHub.
 
-## 4. Innovation & Healthcare Problem Solved
+### 4. Install Backend Dependencies
 
-### The Problem:
-Healthcare claims denials are at an all-time high. According to the **American Hospital Association (AHA)** and **Kaiser Family Foundation (KFF)**:
-- **Over 15% of in-network claims** are initially denied by commercial and public payers.
-- Healthcare organizations spend **$19.7 billion annually** just appealing denied claims.
-- The average administrative cost to rework an appeal is **$118 per claim**, taking an average of **14 to 45 days** of manual investigator time.
-- Most automated claim review systems are "black boxes" that deny claims without providing concrete, verifiable policy citations, leading to provider friction and patient distress.
+Create and activate a Python virtual environment:
 
-### The Medarina Innovation:
-- **Transparent, Evidence-Based Verification**: Rather than assigning arbitrary rejection scores, Medarina sends TinyFish to navigate and inspect live public payer coverage policies, fee schedules, and AMA coding manuals in real time.
-- **Explainable Discrepancy Detection**: Discrepancies (such as unbundled procedure codes, missing modifier 95 for telemedicine, or lack of conservative therapy documentation) are cross-referenced with exact policy excerpts.
-- **Human-in-the-Loop Determination**: Medarina never issues automated denials. It acts as an investigator copilot, organizing live evidence, calculating risk indicators, and producing auditable reports for certified medical coders and compliance officers.
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
 
----
+If PowerShell blocks activation, use the environment's Python executable directly.
 
-## 5. Market Sizing & Revenue Model
+Install the project's backend dependencies using its existing requirements file, if provided:
 
-### Total Addressable Market (TAM):
-- **Global Healthcare Revenue Cycle Management (RCM) Market**: $140.2 Billion by 2028 (CAGR 11.8%, Grand View Research).
-- **Target Segment (Claims Audit & Integrity Solutions)**: $4.5 Billion market across US hospital networks, independent practice associations (IPAs), and third-party administrators (TPAs).
+```powershell
+py -m pip install -r backend/requirements.txt
+```
 
-### Commercial Pricing & Tiered SaaS Model:
-1. **Starter / Provider Practice Tier** ($499 / month):
-   - Up to 250 claim investigations / month
-   - Automated CPT/ICD-10 intake & CMS policy retrieval via TinyFish
-   - Standard PDF & JSON compliance report export
-2. **Professional / Hospital Network Tier** ($2,499 / month):
-   - Up to 2,500 investigations / month
-   - Multi-payer LCD/NCD live policy crawler
-   - Gemini AI clinical synthesis + custom compliance rule configuration
-   - Supabase dedicated team workspace with audit history
-3. **Enterprise Health Plan / TPA Tier** (Custom Contract, $15,000+ / month):
-   - Unlimited batch claim ingestion via FHIR / HL7 APIs
-   - Dedicated TinyFish crawler concurrency pool
-   - Real-time pre-submission denial prevention engine
-   - SOC2 & HIPAA compliant dedicated deployment
+If the dependency file is located elsewhere, use the path present in the repository.
 
-### ROI for Customers:
-For a 300-bed hospital processing 12,000 complex claims annually:
-- Reducing the claim rework rate by just **12%** saves **$170,000 in administrative rework costs** and accelerates **$3.2 million in delayed cash flow**.
+### 5. Start the Backend
 
----
+From the project root:
 
-## 6. Social Media & Demo Presentation
+```powershell
+py -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
 
-### Social Media Post (LinkedIn / X):
-> 🏥 Excited to introduce **Medarina** — an open, full-stack healthcare claims investigation platform combining @FastAPI, @React, @Supabase, and @TinyFish!
->
-> 🔍 Traditional claims audits rely on outdated rules or opaque AI. Medarina dispatches TinyFish live-web browser agents to crawl real CMS.gov fee schedules and payer policies in real time, pairing verbatim citations with clinical risk scoring.
->
-> ⚡ Zero mock data. 100% full-stack integration: React 19 ➔ FastAPI ➔ TinyFish Live Crawler ➔ Gemini AI ➔ Supabase PostgreSQL.
->
-> 🔗 Check out the project and live reproduction guide on GitHub: https://github.com/vidhi-421/mediarine
-> #HealthcareAI #HealthTech #FullStack #FastAPI #React #TinyFish #OpenSource #WebAutomation
+Backend endpoints:
 
-### 2-Minute Demo Video Script:
-- **0:00 - 0:25 (The Problem)**: Show a complex Medicare telehealth claim (CPT 99214 + Modifier 95). Explain that manual policy checking takes 30 minutes per claim and leads to costly denials.
-- **0:25 - 0:50 (Intake & TinyFish Trigger)**: Create an investigation in Medarina. Point out the live backend status pill and toggle "Run TinyFish live-web retrieval now". Click Submit.
-- **0:50 - 1:20 (The 7-Stage Workflow)**: Watch the live 7-stage workflow stepper. Highlight Stage 2: TinyFish Live-Web Retrieval with live timer ticker and polling every 3 seconds. Show the real browser crawler fetching data.
-- **1:20 - 1:45 (Evidence & Analysis)**: Evidence card updates with exact source URL, publisher badge, and verbatim policy text. Show Gemini / rule-based risk evaluation and click "Save Report" to persist to Supabase.
-- **1:45 - 2:00 (Diagnostics & Conclusion)**: Navigate to Settings, run the TinyFish Live Diagnostic against a target URL in 15 seconds, and demonstrate that the platform is 100% real, functional, and hackathon-ready.
+- Health check: `http://127.0.0.1:8000/health`
+- API documentation: `http://127.0.0.1:8000/docs`
 
----
+### 6. Start the Frontend
 
-## 7. License & Compliance
+Open a second terminal in the project root:
 
-Medarina is open-source under the MIT License. Designed with privacy-first architecture: clinical PHI is never sent to unauthenticated web crawlers; TinyFish queries only publicly accessible payer documentation and regulatory fee schedules.
+```powershell
+npm.cmd run dev
+```
 
+Open the application:
+
+**http://localhost:8443/**
+
+Use the port displayed by Vite if the configured port differs.
+
+### 7. Test the Application
+
+1. Open the Medarina dashboard.
+2. Create a test investigation using fictional claim information.
+3. Configure TinyFish in Settings.
+4. Run the controlled live retrieval test.
+5. Check whether evidence is returned and attached to the investigation.
+6. Review the analysis, risk indicators, and report.
+7. Verify that the investigation and report can be reopened from history.
+
+Use fictional data for testing. Do not enter identifiable patient information into an unapproved environment.
+
+## Database Setup
+
+Medarina uses Supabase for backend persistence.
+
+The repository includes an initial database migration at:
+
+```text
+backend/migrations/001_initial_schema.sql
+```
+
+Review the migration and the backend database implementation before applying it to a new project. Configure the correct Supabase credentials and verify that required tables and permissions are available.
+
+Do not expose the Supabase service-role key in frontend code.
+
+## Testing and Build
+
+Run the backend tests:
+
+```powershell
+py -m pytest backend/tests/ -v
+```
+
+Build the frontend:
+
+```powershell
+npm.cmd run build
+```
+
+During development, the backend test suite was reported to pass 21 tests and the frontend production build completed successfully. These results describe the tested development state; rerun both commands against the latest checkout to verify the current revision.
+
+Live retrieval also depends on external service availability and valid credentials.
+
+## Responsible Use and Limitations
+
+- Retrieved webpages may not contain all the rules needed to resolve a claim.
+- AI-generated summaries and risk indicators require human verification.
+- Missing documentation is not proof of misconduct.
+- A successful API connection does not guarantee that every retrieval request will succeed.
+- Retrieval can fail or time out because of webpage complexity, external service delays, or configuration issues.
+- Audit outcomes must be based on appropriate evidence and reviewer judgment.
+- Medarina is a development project and should not be treated as a certified clinical or claims adjudication system.
+
+## Potential Users
+
+- Healthcare claims reviewers
+- Medical billing and coding audit teams
+- Healthcare compliance professionals
+- Research and audit support teams
+- Developers building healthcare investigation workflows
+
+## Expected Impact
+
+Medarina aims to reduce the effort required to gather public policy information, make evidence easier to review, improve traceability during investigations, and support more consistent documentation of audit decisions.
+
+Its value depends on reliable evidence retrieval, appropriate policy interpretation, and transparent human review.
+
+## Future Improvements
+
+- Broader coverage of authoritative healthcare policy sources
+- Stronger evidence citations and source-level verification
+- Improved handling of long-running retrieval tasks
+- More comprehensive billing-code and policy cross-referencing
+- Enhanced report export and reviewer sign-off workflows
+- Better monitoring of retrieval quality and service reliability
+
+## Repository
+
+GitHub: https://github.com/vidhi-421/mediarine
+
+## Acknowledgment
+
+Built as an open-innovation healthcare technology project exploring AI-assisted investigation, live web intelligence, and evidence-supported audit workflows.
+
+**Medarina — From claim submission to evidence-informed review.**
