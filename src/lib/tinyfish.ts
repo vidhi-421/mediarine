@@ -64,9 +64,49 @@ async function call(cfg: TinyfishConfig, body: unknown) {
 /** Sends a lightweight ping to confirm the endpoint responds. */
 export async function testConnection(cfg: TinyfishConfig): Promise<{ ok: boolean; message: string }> {
   if (!cfg.endpoint) return { ok: false, message: 'No retrieval endpoint configured.' }
+  const isTinyFish = /agent\.tinyfish\.ai|tinyfish\.ai/i.test(cfg.endpoint)
+
+  // If endpoint is TinyFish Agent and no API key is provided in browser,
+  // try the backend test endpoint so server-side credentials can be used.
+  if (isTinyFish && !cfg.apiKey) {
+    try {
+      const backendBase =
+        typeof window !== 'undefined' && (window.location.port === '8443' || window.location.port === '5173')
+          ? 'http://127.0.0.1:8000'
+          : ''
+      const bRes = await fetch(`${backendBase}/api/tinyfish/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: cfg.endpoint, apiKey: '' }),
+      })
+      if (bRes.ok) {
+        const bData = await bRes.json().catch(() => null)
+        if (bData && typeof bData.ok === 'boolean') {
+          return bData
+        }
+      }
+    } catch {
+      // Backend unreachable; proceed to direct ping
+    }
+  }
+
   try {
     const res = await call(cfg, { ping: true })
-    return res.ok ? { ok: true, message: `Endpoint responded with HTTP ${res.status}.` } : { ok: false, message: `Endpoint responded with HTTP ${res.status}.` }
+    if (res.ok) {
+      return { ok: true, message: isTinyFish ? 'TinyFish Agent API connected and authenticated.' : `Endpoint responded with HTTP ${res.status}.` }
+    }
+    const data = await res.json().catch(() => null)
+    if (isTinyFish && res.status === 400) {
+      // TinyFish Agent API returns 400 INVALID_INPUT for {"ping": true} because it validates schema,
+      // but returns 401 Unauthorized if the API key is invalid or missing.
+      return { ok: true, message: 'TinyFish Agent API connected and authenticated.' }
+    }
+    if (res.status === 401) {
+      const detail = data?.error?.message || 'TinyFish API key rejected (HTTP 401 Unauthorized).'
+      return { ok: false, message: detail }
+    }
+    const errMsg = data?.error?.message || data?.message || `Endpoint responded with HTTP ${res.status}.`
+    return { ok: false, message: errMsg }
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : 'Connection failed.' }
   }

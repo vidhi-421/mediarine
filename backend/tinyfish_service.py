@@ -314,8 +314,11 @@ async def test_connection(endpoint: str, api_key: str = "") -> dict:
     if not ep:
         return {"ok": False, "message": "No endpoint provided."}
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
+    key = (api_key or "").strip()
+    if not key:
+        key = (os.getenv("TINYFISH_API_KEY", "") or _TINYFISH_API_KEY).strip()
+    if key:
+        headers["X-API-Key"] = key
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(ep, json={"ping": True}, headers=headers)
@@ -332,6 +335,13 @@ async def test_connection(endpoint: str, api_key: str = "") -> dict:
                 "message": "TinyFish Agent API connected and authenticated.",
             }
         if resp.status_code == 401:
+            try:
+                err_data = resp.json()
+                detail = err_data.get("error", {}).get("message")
+                if detail:
+                    return {"ok": False, "message": f"TinyFish API key rejected: {detail}."}
+            except Exception:
+                pass
             return {
                 "ok": False,
                 "message": "TinyFish API key rejected (HTTP 401 Unauthorized).",

@@ -313,3 +313,40 @@ def test_tinyfish_timeout_and_normalization():
     assert tf.normalize_endpoint("https://agent.tinyfish.ai/v1/automation/run") == "https://agent.tinyfish.ai/v1/automation/run"
 
 
+def test_tinyfish_test_endpoint_empty():
+    r = client.post("/api/tinyfish/test", json={"endpoint": ""})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "No endpoint provided" in data["message"]
+
+
+def test_tinyfish_test_endpoint_mock_400():
+    import tinyfish_service as tf
+    import httpx
+    import pytest
+
+    # Mock an authenticated TinyFish Agent API 400 INVALID_INPUT schema response
+    class MockResp:
+        status_code = 400
+        is_success = False
+
+        def json(self):
+            return {"error": {"code": "INVALID_INPUT", "message": "Field 'url' required"}}
+
+    async def run_test():
+        orig_post = httpx.AsyncClient.post
+        async def mock_post(self, url, *args, **kwargs):
+            return MockResp()
+        httpx.AsyncClient.post = mock_post
+        try:
+            res = await tf.test_connection("https://agent.tinyfish.ai/v1/automation/run", "test-key")
+            assert res["ok"] is True
+            assert "connected and authenticated" in res["message"].lower()
+        finally:
+            httpx.AsyncClient.post = orig_post
+
+    import asyncio
+    asyncio.run(run_test())
+
+

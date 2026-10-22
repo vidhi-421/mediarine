@@ -166,7 +166,15 @@ export default function SettingsPage() {
             </div>
             <div className="flex items-center justify-end gap-3 border-t border-line px-5 py-4">
               {saved && <span role="status" className="text-sm text-success-fg">Saved</span>}
-              <Button type="button" loading={testing} disabled={!s.retrievalEndpoint} onClick={async () => { setTesting(true); setTest(await testConnection(getConfig(s))); setTesting(false) }}>Test connection</Button>
+              <Button type="button" loading={testing} disabled={!s.retrievalEndpoint && !endpoint.trim()} onClick={async () => {
+                setTesting(true)
+                const targetCfg = getConfig({
+                  retrievalEndpoint: endpoint.trim() || s.retrievalEndpoint,
+                  tinyfishApiKey: apiKey.trim() || s.tinyfishApiKey,
+                })
+                setTest(await testConnection(targetCfg))
+                setTesting(false)
+              }}>Test connection</Button>
               <Button type="submit" variant="primary">Save endpoint</Button>
             </div>
           </Card>
